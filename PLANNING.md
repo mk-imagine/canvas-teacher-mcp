@@ -1,5 +1,7 @@
 # Canvas Teacher MCP Server — Planning Document
 
+> **Note:** This document contains design details, course codes, naming conventions, and template structures that are specific to a particular school and program. The Canvas API integration and tool architecture are general-purpose, but sections 1, 3–4, and 13 in particular reflect that specific instructional context.
+
 > **Purpose of this document:** Serves as the authoritative design reference for both human developers and AI assistants working on this codebase. All tool definitions include explicit input/output contracts and Canvas API calls so that implementation can proceed without ambiguity.
 
 ---
@@ -38,9 +40,9 @@ A single instructor managing 5 sequential courses in a certificate program, ofte
 |---------|-------------------------------|-----------------|
 | CSC 306 | Introduction to Programming   | `earlier`       |
 | CSC 311 | Applied Data Structures       | `earlier`       |
-| CSC 408 | Introduction to Machine Learning | `later`      |
-| CSC 411 | Advanced Machine Learning     | `later`         |
-| CSC 509 | Capstone                      | `later`         |
+| CSC 408 | Data Science for Personalized Medicine        | `later` |
+| CSC 411 | Intermediate Machine Learning                 | `later` |
+| CSC 509 | Machine Learning for Medical Image Analysis  | `later` |
 
 ### Scope
 
