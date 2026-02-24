@@ -21,6 +21,7 @@
 11. [Future Integrations Roadmap](#11-future-integrations-roadmap)
 12. [Known Limitations](#12-known-limitations)
 13. [Testing & Validation](#13-testing--validation)
+14. [FERPA PII Blinding](#14-ferpa-pii-blinding)
 
 ---
 
@@ -674,30 +675,48 @@ All tools accept an optional `course_id` parameter. If omitted, the active cours
 
 All reporting tools return structured data suitable for display as a table or summary narrative. They join multiple Canvas API responses internally.
 
+> **FERPA note:** Student names and Canvas IDs returned by reporting tools are PII subject to FERPA. Phase 6 will add a PII blinding layer that replaces this data with opaque tokens before it reaches the LLM. See [Section 14](#14-ferpa-pii-blinding) for full design details and the list of required tool changes.
+
 ---
 
 #### `get_class_grade_summary`
 
-**Purpose:** Show every enrolled student's current grade total, final grade total, missing assignment count, and late assignment count. Primary tool for a quick class health check.
+**Purpose:** Show every enrolled student's current grade total, final grade total, missing assignment count, and late assignment count. Primary tool for a quick class health check. With `sort_by: "engagement"`, produces a student standing report ordered from most-at-risk to least — useful for prioritizing follow-up outreach.
 
 **Inputs:**
 - `course_id` (number, optional).
-- `assignment_group_id` (number, optional): Filter grade totals to a specific group.
+- `assignment_group_id` (number, optional): Filter submission counts to a specific assignment group.
+- `sort_by` (string, optional): `"name"` (default) | `"engagement"` | `"grade"` | `"zeros"`.
+  - `"engagement"`: `missing_count DESC`, then `late_count DESC`, then `name ASC`. Produces a standing report where most-at-risk students appear first.
+  - `"grade"`: `current_score ASC`, nulls first, then `name ASC`. Surfaces students with the lowest (or no) grade first.
+  - `"zeros"`: `zeros_count DESC`, then `name ASC`. `zeros_count` is the number of submissions where `score === 0` (explicit zero grades — a signal of non-participation).
 
 **Output:**
 ```jsonc
 {
   "course": "CSC 408 — Introduction to Machine Learning",
   "as_of": "2025-02-21T14:30:00Z",
+  "sort_by": "engagement",
   "students": [
     {
       "id": 1001,
       "name": "Jane Smith",
       "current_score": 87.4,
       "final_score": 82.1,
-      "missing_count": 1,
-      "late_count": 0,
-      "ungraded_count": 2
+      "missing_count": 3,
+      "late_count": 1,
+      "ungraded_count": 0,
+      "zeros_count": 1
+    },
+    {
+      "id": 1002,
+      "name": "John Doe",
+      "current_score": 94.1,
+      "final_score": 91.0,
+      "missing_count": 0,
+      "late_count": 2,
+      "ungraded_count": 1,
+      "zeros_count": 0
     }
     // ...
   ]
@@ -707,6 +726,11 @@ All reporting tools return structured data suitable for display as a table or su
 **Canvas API Calls:**
 1. `GET /api/v1/courses/:id/enrollments?type[]=StudentEnrollment&include[]=current_points`
 2. `GET /api/v1/courses/:id/students/submissions?student_ids[]=all&include[]=assignment`
+
+**Notes:**
+- No additional Canvas API calls are required for the `sort_by` parameter — sorting is applied client-side to data already fetched.
+- The `"engagement"` sort is the recommended input when generating a student standing report or identifying students for follow-up.
+- `zeros_count` counts submissions where `score === 0` (not `null`/missing). A zero score means the instructor explicitly graded the work as zero, often indicating non-submission or non-participation.
 
 ---
 
@@ -1085,14 +1109,19 @@ This stage adds student accounts and the seed script so that reporting tools hav
 **Test environment required:** Pre-Phase A + Pre-Phase B + Pre-Phase C (seed must be run)
 
 - Tools: `list_modules`, `get_module_summary`, `list_assignment_groups`.
-- Tools: `get_class_grade_summary`, `get_assignment_breakdown`, `get_student_report`, `get_missing_assignments`, `get_late_assignments`.
+- Tools: `get_class_grade_summary` (with `sort_by` parameter), `get_assignment_breakdown`, `get_student_report`, `get_missing_assignments`, `get_late_assignments`.
 
 **Tests written in this phase:**
 - Unit: grade/submission data transformations, missing/late flag filtering, pagination across large result sets (mocked)
+- Unit: `get_class_grade_summary` with `sort_by: "engagement"` — student with highest `missing_count` appears first; ties broken by `late_count` then `name`
+- Unit: `get_class_grade_summary` with `sort_by: "grade"` — lowest/null score first; `sort_by: "zeros"` — most zero-scored submissions first
+- Unit: `zeros_count` field present on all rows; counts only `score === 0` submissions (not null)
 - Integration: all reporting suites against seeded data — results verified against known seed state from Section 13.2
+- Integration: `get_class_grade_summary` with `sort_by: "engagement"` — Student 4 (most missing) appears first
+- Integration: `get_class_grade_summary` with `sort_by: "grade"` — null-score student first; `sort_by: "zeros"` — `zeros_count` field present
 - MCP protocol: response format for all reporting tools
 
-**Exit criterion:** Can generate a full grade health report for a class and identify students needing follow-up. All Phase 2 tests pass against seeded data.
+**Exit criterion:** Can generate a full grade health report for a class and identify students needing follow-up. `sort_by: "engagement"` produces a student standing report ordered from most-at-risk to least. All Phase 2 tests pass against seeded data.
 
 ---
 
@@ -1143,6 +1172,31 @@ This stage adds student accounts and the seed script so that reporting tools hav
 - MCP protocol: destructive tool schemas
 
 **Exit criterion:** Can safely clear a sandbox course with explicit confirmation. All Phase 5 tests pass.
+
+---
+
+### Phase 6 — FERPA PII Blinding
+
+**Prerequisites:** Phase 2 complete (reporting tools must exist before adding blinding middleware).
+
+Student names and Canvas user IDs returned by the Phase 2 reporting tools are FERPA-protected PII. When the MCP server is used with a cloud-hosted AI assistant (e.g., Claude), that data passes through a third-party model context. Phase 6 adds an opt-in blinding layer that intercepts reporting tool responses before they reach the LLM, replacing student-identifiable fields with deterministic opaque tokens, and writes a local sidecar map file that the LLM cannot read.
+
+See [Section 14](#14-ferpa-pii-blinding) for full design details.
+
+**Deliverables:**
+- `src/pii/tokenizer.ts` — deterministic token generation
+- `src/pii/map.ts` — sidecar map file read/write
+- `src/pii/middleware.ts` — wraps reporting tool handlers: blinds output PII, resolves token inputs
+- Config additions: `piiBlinding.enabled`, `piiBlinding.installationSecret`, `piiBlinding.mapPath`
+- New tools: `resolve_student`, `list_blinded_students`
+- `.claudeignore` file in the project root documenting the map file location
+- Updated `get_student_report` input schema: accepts `student_token` (string) in addition to `student_id` (number)
+
+**Tests written in this phase:**
+- Unit: tokenizer is deterministic (same inputs always produce same token), produces different tokens for different Canvas IDs, map file read/write roundtrip, middleware correctly replaces `id`/`name`/`sortable_name` with tokens, token input resolution on `get_student_report`
+- Integration: with `piiBlinding.enabled=true`, no real student names or Canvas IDs appear in any reporting tool output; `resolve_student` correctly resolves a token to the real Canvas ID; `get_student_report` with a token input works end-to-end
+
+**Exit criterion:** With `piiBlinding.enabled=true`, no student-identifiable data appears in any reporting tool response. Tokens are stable across server restarts. `resolve_student` unblínds correctly. All Phase 6 tests pass.
 
 ---
 
@@ -1431,10 +1485,11 @@ Each phase's exit criterion includes passing its associated tests before moving 
 | Phase | Unit tests | Integration tests | MCP protocol |
 |---|---|---|---|
 | 1 — Foundation | Config manager, client pagination/retry/auth | Course resolution against real Canvas | Tool list, schema validation |
-| 2 — Reporting | Grade/submission data transformations, missing/late logic | All reporting suites against seeded data | Response format for all reporting tools |
+| 2 — Reporting | Grade/submission data transformations, missing/late logic, `sort_by: "engagement"` ordering | All reporting suites against seeded data | Response format for all reporting tools |
 | 3 — Low-level creation | Input validation, template rendering | `add_module_item`, `create_assignment`, `create_quiz` round-trips | Write tool schema validation |
 | 4 — High-level creation | `dry_run` validation, slot matching, partial failure | Lesson + solution module suites, clone suite | High-level tool schemas |
 | 5 — Destructive ops | Confirmation text matching | Full sandbox reset suite | Destructive tool schemas |
+| 6 — PII Blinding | Tokenizer determinism, map file I/O, middleware output/input interception | End-to-end blinding with real Canvas data, `resolve_student` unblinding | Blinded tool response format |
 
 ---
 
@@ -1446,3 +1501,219 @@ Each phase's exit criterion includes passing its associated tests before moving 
 | New Quizzes API | Out of scope | N/A |
 | Institutional rate limits | Test instance has different limits than institution | Monitor `X-Rate-Limit-Remaining` in production; adjust client delays if needed |
 | Multi-term course disambiguation at institution | Test instance may not replicate exact term structure | Manual verification of `set_active_course` during first institutional use |
+
+---
+
+## 14. FERPA PII Blinding
+
+### 14.1 Background and Motivation
+
+Student grade records, submission data, and attendance are personally identifiable information (PII) regulated by FERPA (Family Educational Rights and Privacy Act). When the MCP server is used with a cloud-hosted AI assistant such as Claude, tool responses containing student names and Canvas IDs are transmitted to and processed by a third-party model. Even if data is not retained by the provider, the act of transmission may constitute a FERPA disclosure risk.
+
+The PII Blinding feature addresses this by:
+
+1. Intercepting reporting tool responses **before** they reach the LLM and replacing student names and Canvas IDs with deterministic, opaque tokens (e.g., `STU-3F9A1C2D`).
+2. Maintaining a **local sidecar map file** that maps tokens back to real student data — this file is never transmitted to the LLM.
+3. Hiding the map file from the AI assistant via `.claudeignore` (or equivalent ignore mechanism).
+4. Providing **controlled unblinding tools** that allow the instructor to intentionally surface a real student name when needed (e.g., to send a follow-up email), creating a clear audit boundary.
+
+---
+
+### 14.2 Design Principles
+
+| Principle | Detail |
+|---|---|
+| **Deterministic tokens** | A given Canvas user ID in a given course always maps to the same token, across sessions and server restarts. |
+| **Local-only PII** | The sidecar map file lives in the MCP config directory (`~/.canvas-teacher-mcp/`) and is never included in any API call or tool response. |
+| **Opt-in** | PII blinding is disabled by default. Existing workflows are unaffected unless the instructor explicitly enables it in config. |
+| **Controlled unblinding** | A dedicated `resolve_student` tool returns real PII for a given token. Its use is explicit and intentional. |
+| **No changes to Canvas API layer** | Blinding is a presentation concern. The underlying Canvas API calls, data models, and business logic in `src/canvas/` are unchanged. |
+
+---
+
+### 14.3 Token Format
+
+Tokens take the form `STU-XXXXXXXX`, where `XXXXXXXX` is the first 8 hex characters (uppercase) of:
+
+```
+SHA-256( courseId + ":" + canvasUserId + ":" + installationSecret )
+```
+
+- `installationSecret` is a random 32-byte hex string generated once on first use and stored in config. It ensures tokens are unguessable from Canvas IDs alone and are unique per installation.
+- The same (courseId, canvasUserId) pair always produces the same token for a given installation, making tokens stable across server restarts and sessions.
+
+Example output: `STU-3F9A1C2D`
+
+---
+
+### 14.4 Sidecar Map File
+
+**Default location:** `~/.canvas-teacher-mcp/pii-map.json`
+**Configurable via:** `piiBlinding.mapPath` in config
+
+```jsonc
+{
+  "STU-3F9A1C2D": {
+    "canvas_id": 12345,
+    "course_id": 67890,
+    "name": "Jane Smith",
+    "sortable_name": "Smith, Jane",
+    "first_seen": "2026-02-01T10:00:00Z",
+    "last_seen": "2026-02-21T14:30:00Z"
+  },
+  "STU-A7C2F1B8": {
+    "canvas_id": 12346,
+    "course_id": 67890,
+    "name": "John Doe",
+    "sortable_name": "Doe, John",
+    "first_seen": "2026-02-01T10:00:00Z",
+    "last_seen": "2026-02-18T09:15:00Z"
+  }
+}
+```
+
+The map file is **additive** — entries are written on first encounter and `last_seen` is updated on subsequent encounters. Existing entries are never deleted automatically.
+
+---
+
+### 14.5 Hiding the Map File from the LLM
+
+The map file must be excluded from AI assistant context. Two mechanisms apply:
+
+**`.claudeignore` (Claude Code / Claude Desktop):**
+A `.claudeignore` file in the working project directory or home directory can list the map file path. Absolute paths are supported. Example:
+
+```
+# FERPA PII map — never expose to AI
+~/.canvas-teacher-mcp/pii-map.json
+```
+
+**`.gitignore`:**
+The map file must also be excluded from version control since it contains real student PII. Add to `.gitignore`:
+
+```
+# FERPA PII sidecar map
+~/.canvas-teacher-mcp/pii-map.json
+```
+
+**Setup tool (optional):**
+A `setup_pii_blinding` tool (or a one-time CLI script) can automate writing the correct ignore entries to the appropriate files in the instructor's working directory.
+
+---
+
+### 14.6 Impact on Phase 2 Reporting Tools
+
+Five of the eight reporting tools return student PII and require blinding when the feature is enabled. No changes are needed to the tools' internal logic or Canvas API calls — the blinding layer is implemented as middleware that wraps the tool handlers.
+
+| Tool | PII in output | PII in input | Blinding action |
+|---|---|---|---|
+| `list_modules` | None | None | No change |
+| `get_module_summary` | None | None | No change |
+| `list_assignment_groups` | None | None | No change |
+| `get_class_grade_summary` | `id`, `name`, `sortable_name` per student | None | Replace with token; write to map |
+| `get_assignment_breakdown` | `student_name`, `student_id` per submission | None | Replace with token; write to map |
+| `get_student_report` | `id`, `name` in student field | `student_id` (number) | Replace output PII with token; **input extended to accept token** |
+| `get_missing_assignments` | `id`, `name`, `sortable_name` per student | None | Replace with token; write to map |
+| `get_late_assignments` | `id`, `name`, `sortable_name` per student | None | Replace with token; write to map |
+
+**The `get_student_report` input change** is the most significant:
+Currently the tool takes `student_id: number` (a raw Canvas user ID). When blinding is active, the LLM only has tokens and cannot supply a Canvas ID. The input schema must be extended to accept either a Canvas ID (number) or a PII token (string in `STU-XXXXXXXX` format). The middleware resolves a token to its Canvas ID via the map file before the underlying tool logic executes.
+
+This is a **non-breaking addition**: the Canvas ID path continues to work unchanged. The token path is new.
+
+---
+
+### 14.7 Architecture
+
+The blinding layer is implemented as middleware that wraps `registerReportingTools`. No changes to `src/canvas/` or the underlying tool handlers are required.
+
+```
+Tool input (from LLM)
+        ↓
+  [PII Middleware — Input]        ← Phase 6 addition
+  - If student_token present:
+      resolve token → canvas_id via map file
+  - Forward resolved input to tool handler
+        ↓
+  [Tool handler — unchanged]
+  - Fetches from Canvas API
+  - Returns raw data with real names/IDs
+        ↓
+  [PII Middleware — Output]       ← Phase 6 addition
+  - For each student record:
+      generate/lookup token for (courseId, canvasUserId)
+      replace id/name/sortable_name with token
+      update map file entry (last_seen)
+  - Return blinded response to LLM
+        ↓
+  LLM context (tokens only, no real PII)
+```
+
+**Implementation sketch (`src/pii/middleware.ts`):**
+
+```typescript
+// Wraps registerReportingTools with blinding when piiBlinding.enabled = true
+export function registerReportingToolsWithBlinding(
+  server: McpServer,
+  client: CanvasClient,
+  configManager: ConfigManager,
+  tokenizer: PiiTokenizer,
+  mapStore: PiiMapStore,
+): void {
+  // Intercept each student-facing tool handler
+  // Apply blinding on output, token resolution on input
+}
+```
+
+---
+
+### 14.8 New Tools (Phase 6)
+
+#### `resolve_student`
+
+**Purpose:** Unblind a PII token — return the real name and Canvas ID for a given token. This tool intentionally transmits PII to the LLM context; its use should be purposeful (e.g., "Look up the real name for STU-3F9A1C2D so I can compose a follow-up email").
+
+**Inputs:**
+- `token` (string, required): A PII token in `STU-XXXXXXXX` format.
+- `course_id` (number, optional): Disambiguates if the same token exists in multiple courses (rare).
+
+**Output:** `{ token, canvas_id, name, course_id }`
+
+**Notes:**
+- Returns an error if the token is not found in the local map file.
+- Does not make any Canvas API calls — reads from the local map file only.
+- Future enhancement: write an audit log entry (`~/.canvas-teacher-mcp/unblind-log.jsonl`) with timestamp and context.
+
+---
+
+#### `list_blinded_students`
+
+**Purpose:** List all known tokens for a course without revealing the underlying PII. Lets the instructor see which tokens are active and when they were last seen — useful for auditing or for asking the LLM to work with a specific student by token.
+
+**Inputs:**
+- `course_id` (number, optional).
+
+**Output:** Array of `{ token, first_seen, last_seen }` — deliberately omits names and Canvas IDs.
+
+---
+
+### 14.9 Config Schema Additions
+
+```jsonc
+{
+  "piiBlinding": {
+    // Enable PII blinding for all student-facing reporting tools.
+    // Default: false (opt-in).
+    "enabled": false,
+
+    // Path to the sidecar PII map file.
+    // Default: null (resolves to ~/.canvas-teacher-mcp/pii-map.json).
+    "mapPath": null,
+
+    // Random secret used as a salt in token generation.
+    // Auto-generated on first use; never change this — doing so invalidates
+    // all existing tokens and breaks cross-session consistency.
+    "installationSecret": "auto-generated-32-byte-hex-string"
+  }
+}
+```

@@ -464,7 +464,7 @@ async function submitAndGrade(content: SeedContent, studentIds: number[]): Promi
 // Integration tests reference these IDs to avoid hardcoding them.
 // The seed script writes them automatically after each run.
 
-function writeSeedIds(content: SeedContent): void {
+function writeSeedIds(content: SeedContent, studentIds: number[]): void {
   const envPath = resolve(process.cwd(), '.env.test')
   let envContent = readFileSync(envPath, 'utf-8')
 
@@ -474,6 +474,7 @@ function writeSeedIds(content: SeedContent): void {
     CANVAS_TEST_ASSIGNMENT_2_ID: String(content.assignmentIds[1]),
     CANVAS_TEST_ASSIGNMENT_3_ID: String(content.assignmentIds[2]),
     CANVAS_TEST_EXIT_CARD_ID: String(content.exitCardId),
+    CANVAS_TEST_STUDENT_IDS: studentIds.join(','),
   }
 
   for (const [key, value] of Object.entries(updates)) {
@@ -520,7 +521,7 @@ async function main(): Promise<void> {
   await submitAndGrade(content, studentIds)
 
   console.log('\nStep 7: Write seed IDs to .env.test')
-  writeSeedIds(content)
+  writeSeedIds(content, studentIds)
 
   console.log('\n✅ Seed complete.\n')
 }

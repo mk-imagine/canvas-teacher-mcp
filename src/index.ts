@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ConfigManager } from './config/manager.js'
 import { CanvasClient } from './canvas/client.js'
 import { registerContextTools } from './tools/context.js'
+import { registerReportingTools } from './tools/reporting.js'
 
 async function main() {
   const configManager = new ConfigManager()
@@ -10,6 +11,7 @@ async function main() {
   const client = new CanvasClient(config.canvas)
   const server = new McpServer({ name: 'canvas-teacher-mcp', version: '0.1.0' })
   registerContextTools(server, client, configManager)
+  registerReportingTools(server, client, configManager)
   await server.connect(new StdioServerTransport())
 }
 

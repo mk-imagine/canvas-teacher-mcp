@@ -89,8 +89,22 @@ export class CanvasClient {
     return response
   }
 
-  async get<T>(path: string, params?: Record<string, string>): Promise<T[]> {
-    let nextUrl: string | null = this.url(path, params)
+  private buildArrayParamUrl(path: string, params: Record<string, string | string[]>): string {
+    const u = new URL(`${this.baseUrl}${path}`)
+    for (const [k, v] of Object.entries(params)) {
+      if (Array.isArray(v)) {
+        for (const item of v) {
+          u.searchParams.append(k, item)
+        }
+      } else {
+        u.searchParams.append(k, v)
+      }
+    }
+    return u.toString()
+  }
+
+  private async paginatedFetch<T>(firstUrl: string): Promise<T[]> {
+    let nextUrl: string | null = firstUrl
     const results: T[] = []
 
     while (nextUrl) {
@@ -122,6 +136,17 @@ export class CanvasClient {
     }
 
     return results
+  }
+
+  async get<T>(path: string, params?: Record<string, string>): Promise<T[]> {
+    return this.paginatedFetch<T>(this.url(path, params))
+  }
+
+  async getWithArrayParams<T>(
+    path: string,
+    params: Record<string, string | string[]>
+  ): Promise<T[]> {
+    return this.paginatedFetch<T>(this.buildArrayParamUrl(path, params))
   }
 
   async getOne<T>(path: string, params?: Record<string, string>): Promise<T> {
