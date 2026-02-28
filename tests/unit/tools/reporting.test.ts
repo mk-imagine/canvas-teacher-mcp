@@ -434,6 +434,31 @@ describe('get_class_grade_summary', () => {
     expect(data.students[0].name).toBe('Jane Smith')
   })
 
+  it('sort_by=engagement: ties on missing+late broken by current_score ASC', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath)
+    // Both students have 0 missing, 0 late; Bob has lower score (60 < 87.4) → Bob first
+    mswServer.use(
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/students/submissions`, () =>
+        HttpResponse.json([
+          { ...MOCK_SUBMISSIONS[0], missing: false, late: false },
+          { ...MOCK_SUBMISSIONS[1], missing: false, late: false },
+          { ...MOCK_SUBMISSIONS[2], missing: false, late: false },
+        ])
+      )
+    )
+    const { mcpClient } = await makeTestClient(configPath)
+    const data = parseResult(
+      await mcpClient.callTool({
+        name: 'get_class_grade_summary',
+        arguments: { sort_by: 'engagement' },
+      })
+    )
+    // Bob current_score=60 < Jane current_score=87.4 → Bob first
+    expect(data.students[0].name).toBe('Bob Adams')
+    expect(data.students[1].name).toBe('Jane Smith')
+  })
+
   it('sort_by=grade: lowest current_score appears first', async () => {
     const configPath = makeTmpConfigPath()
     writeConfig(configPath)

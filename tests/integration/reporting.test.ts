@@ -176,7 +176,7 @@ describe('Integration: get_class_grade_summary', () => {
     expect(data.student_count).toBe(5)
   })
 
-  it.skipIf(!hasSeedIds)('Student 4 has missing_count=4 (A1, A2, A3, exit card per seed)', async () => {
+  it.skipIf(!hasSeedIds)('Student 4 has missing_count=3 (A1, A2, exit card per seed)', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
@@ -186,12 +186,12 @@ describe('Integration: get_class_grade_summary', () => {
     // studentIds[3] is Student 4 (0-indexed)
     const s4 = data.students.find((s: { id: number }) => s.id === studentIds[3])
     expect(s4, 'Student 4 not found in grade summary').toBeDefined()
-    // Exit card quiz (graded_survey, past due) also counts as missing
-    expect(s4.missing_count).toBe(4)
+    // A3 is due in the future so it is not yet missing; A1, A2, exit card are past due
+    expect(s4.missing_count).toBe(3)
     console.log(`  Student 4 missing_count: ${s4.missing_count}`)
   })
 
-  it.skipIf(!hasSeedIds)('Student 2 has missing_count=3 (A2, A3, exit card per seed)', async () => {
+  it.skipIf(!hasSeedIds)('Student 2 has missing_count=2 (A2, exit card per seed)', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
@@ -200,8 +200,8 @@ describe('Integration: get_class_grade_summary', () => {
     )
     const s2 = data.students.find((s: { id: number }) => s.id === studentIds[1])
     expect(s2, 'Student 2 not found').toBeDefined()
-    // Exit card quiz (graded_survey, past due) also counts as missing
-    expect(s2.missing_count).toBe(3)
+    // A3 is on-time+graded (future due date), so only A2 and exit card are missing
+    expect(s2.missing_count).toBe(2)
   })
 
   it('echoes sort_by="name" in response when not specified', async () => {
@@ -237,7 +237,7 @@ describe('Integration: get_class_grade_summary', () => {
       })
     )
     expect(data.sort_by).toBe('engagement')
-    // Student 4 has 4 missing — highest missing_count, should sort first
+    // Student 4 has 3 missing (A1, A2, exit) — highest missing_count, should sort first
     expect(data.students[0].id).toBe(studentIds[3])
     console.log(
       `  Engagement order: ${data.students.slice(0, 3).map((s: { name: string; missing_count: number; late_count: number }) => `${s.name}(m:${s.missing_count},l:${s.late_count})`).join(', ')}`
@@ -337,7 +337,7 @@ describe('Integration: get_assignment_breakdown', () => {
 // ─── get_student_report ────────────────────────────────────────────────────────
 
 describe('Integration: get_student_report', () => {
-  it.skipIf(!hasSeedIds)('Student 4: all assignments missing (A1, A2, A3, exit card)', async () => {
+  it.skipIf(!hasSeedIds)('Student 4: 3 assignments missing (A1, A2, exit card; A3 not yet due)', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
@@ -347,8 +347,8 @@ describe('Integration: get_student_report', () => {
         arguments: { student_id: studentIds[3] },
       })
     )
-    // Exit card quiz (graded_survey, past due) also counts as missing
-    expect(data.summary.total_missing).toBe(4)
+    // A3 is due in the future so it is not yet missing; A1, A2, exit card are past due
+    expect(data.summary.total_missing).toBe(3)
     expect(data.summary.total_graded).toBe(0)
     console.log(`  Student 4: missing=${data.summary.total_missing}, graded=${data.summary.total_graded}`)
   })
@@ -392,8 +392,8 @@ describe('Integration: get_missing_assignments', () => {
     const data = parseResult(
       await mcpClient.callTool({ name: 'get_missing_assignments', arguments: {} })
     )
-    // At minimum Student 2 (A2, A3, exit card) and Student 4 (A1, A2, A3, exit card) are missing
-    // (quiz submission states may add additional students depending on Canvas grading behavior)
+    // At minimum Student 2 (A2, exit card) and Student 4 (A1, A2, exit card) are missing
+    // (A3 is due in the future so it is not yet missing for any student)
     expect(data.students.length).toBeGreaterThanOrEqual(2)
     const s4 = data.students.find((s: { id: number }) => s.id === studentIds[3])
     const s2 = data.students.find((s: { id: number }) => s.id === studentIds[1])
@@ -404,7 +404,7 @@ describe('Integration: get_missing_assignments', () => {
     )
   })
 
-  it.skipIf(!hasSeedIds)('Student 4 has 4 missing assignments (A1, A2, A3, exit card)', async () => {
+  it.skipIf(!hasSeedIds)('Student 4 has 3 missing assignments (A1, A2, exit card; A3 not yet due)', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
@@ -413,8 +413,8 @@ describe('Integration: get_missing_assignments', () => {
     )
     const s4 = data.students.find((s: { id: number }) => s.id === studentIds[3])
     expect(s4, 'Student 4 not found in missing list').toBeDefined()
-    // Exit card quiz (graded_survey, past due) also counts as missing
-    expect(s4.missing_count).toBe(4)
+    // A3 is due in the future so it is not yet missing; A1, A2, exit card are past due
+    expect(s4.missing_count).toBe(3)
   })
 
   it.skipIf(!hasSeedIds)('Student 4 appears first (most missing)', async () => {

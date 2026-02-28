@@ -36,7 +36,7 @@ export class ConfigManager {
   private readonly configPath: string
 
   constructor(configPath?: string) {
-    this.configPath = configPath ?? join(homedir(), '.canvas-teacher-mcp', 'config.json')
+    this.configPath = configPath ?? join(homedir(), '.config', 'mcp', 'canvas-teacher-mcp', 'config.json')
   }
 
   read(): CanvasTeacherConfig {

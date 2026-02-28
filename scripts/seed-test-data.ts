@@ -36,27 +36,37 @@ if (missing.length > 0) {
   process.exit(1)
 }
 
+// ─── Date constants ───────────────────────────────────────────────────────────
+
+const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString()
+const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+const oneWeekFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+const oneYearFromNow = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
+
 // ─── Seed table ───────────────────────────────────────────────────────────────
 //
 // Per-student: [a1, a2, a3, submitExitCard]
-// Assignment grades: number = submit + grade, null = submit (ungraded), undefined = missing
+// Grade values: number = submit + grade, null = submit (ungraded), undefined = not submitted
 //
-// All assignments have a past due date, so every submission is marked "late" by Canvas.
+// A1 due 2 weeks ago (past) — all submissions are late
+// A2 due 1 week ago (past)  — all submissions are late
+// A3 due 1 week from now    — submissions are on-time; non-submissions are NOT yet missing
+// Exit card due 2 weeks ago — submissions are late; auto-graded by Canvas (graded_survey)
 //
-// Student 1: A1 graded 10, A2 graded 8,  A3 ungraded,  Exit submitted
-// Student 2: A1 graded 7,  A2 missing,   A3 missing,   Exit not submitted
-// Student 3: A1 graded 9,  A2 graded 10, A3 ungraded,  Exit submitted
-// Student 4: A1 missing,   A2 missing,   A3 missing,   Exit not submitted
-// Student 5: A1 graded 5,  A2 ungraded,  A3 graded 10, Exit submitted
+// Student 1: A1=late+graded(10), A2=late+graded(8),  A3=on-time+ungraded, Exit=submitted
+// Student 2: A1=late+graded(7),  A2=missing,          A3=on-time+graded(9), Exit=missing
+// Student 3: A1=late+graded(9),  A2=late+graded(10),  A3=not-yet-due,       Exit=submitted
+// Student 4: A1=missing,         A2=missing,           A3=not-yet-due,       Exit=missing
+// Student 5: A1=late+graded(5),  A2=late+ungraded,     A3=on-time+graded(0), Exit=submitted
 
 type Grade = number | null | undefined
 
 const SEED: Array<[Grade, Grade, Grade, boolean]> = [
   [10, 8,         null,      true],   // Student 1
-  [7,  undefined, undefined, false],  // Student 2
-  [9,  10,        null,      true],   // Student 3
+  [7,  undefined, 9,         false],  // Student 2
+  [9,  10,        undefined, true],   // Student 3
   [undefined, undefined, undefined, false], // Student 4
-  [5,  null,      10,        true],   // Student 5
+  [5,  null,      0,         true],   // Student 5
 ]
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -255,11 +265,6 @@ interface SeedContent {
 }
 
 async function createContent(): Promise<SeedContent> {
-  const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString()
-  // Explicitly set lock_at far in the future so Canvas doesn't auto-lock the assignment
-  // when due_at is in the past (which would produce a 403 on submission).
-  const oneYearFromNow = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
-
   // Use the first available assignment group (Canvas always creates a default one)
   const groups = await canvasGet<{ id: number; name: string }>(
     TEACHER,
@@ -273,10 +278,10 @@ async function createContent(): Promise<SeedContent> {
       })
     ).id
 
-  // Create 3 assignments (sequential — Canvas can have issues with parallel assignment creation)
+  // Create 3 assignments with different due dates (sequential — Canvas can have issues with parallel creation)
+  // lock_at is set far in the future so Canvas doesn't auto-lock when due_at is in the past.
   const assignmentBase = {
     points_possible: 10,
-    due_at: twoWeeksAgo,
     lock_at: oneYearFromNow,
     submission_types: ['online_url'],
     assignment_group_id: groupId,
@@ -284,15 +289,15 @@ async function createContent(): Promise<SeedContent> {
   }
 
   const a1 = await canvasPost<{ id: number }>(TEACHER, `/courses/${COURSE_ID}/assignments`, {
-    assignment: { ...assignmentBase, name: 'Week 1 | Assignment 1.1 | Seed Assignment A' },
+    assignment: { ...assignmentBase, name: 'Week 1 | Assignment 1.1 | Seed Assignment A', due_at: twoWeeksAgo },
   })
   const a2 = await canvasPost<{ id: number }>(TEACHER, `/courses/${COURSE_ID}/assignments`, {
-    assignment: { ...assignmentBase, name: 'Week 1 | Assignment 1.2 | Seed Assignment B' },
+    assignment: { ...assignmentBase, name: 'Week 1 | Assignment 1.2 | Seed Assignment B', due_at: oneWeekAgo },
   })
   const a3 = await canvasPost<{ id: number }>(TEACHER, `/courses/${COURSE_ID}/assignments`, {
-    assignment: { ...assignmentBase, name: 'Week 1 | Assignment 1.3 | Seed Assignment C' },
+    assignment: { ...assignmentBase, name: 'Week 1 | Assignment 1.3 | Seed Assignment C', due_at: oneWeekFromNow },
   })
-  console.log(`    Created assignments: ${a1.id}, ${a2.id}, ${a3.id}`)
+  console.log(`    Created assignments: ${a1.id} (due 2wk ago), ${a2.id} (due 1wk ago), ${a3.id} (due 1wk from now)`)
 
   // Create exit card quiz (Canvas returns 200, not 201, for quiz creation)
   const exitCard = await canvasPost<{ id: number }>(TEACHER, `/courses/${COURSE_ID}/quizzes`, {
@@ -419,15 +424,18 @@ async function submitAndGrade(content: SeedContent, studentIds: number[]): Promi
         },
       })
 
+      // A3 (index 2) is due in the future, so its submissions are on-time
+      const timing = ai < 2 ? 'late' : 'on-time'
+
       if (grade !== null) {
         await canvasPut(
           TEACHER,
           `/courses/${COURSE_ID}/assignments/${assignmentIds[ai]}/submissions/${studentId}`,
           { submission: { posted_grade: String(grade) } }
         )
-        console.log(`    Student ${si + 1} → A${ai + 1}: submitted + graded ${grade}/10 (late)`)
+        console.log(`    Student ${si + 1} → A${ai + 1}: submitted + graded ${grade}/10 (${timing})`)
       } else {
-        console.log(`    Student ${si + 1} → A${ai + 1}: submitted, ungraded (late)`)
+        console.log(`    Student ${si + 1} → A${ai + 1}: submitted, ungraded (${timing})`)
       }
     }
 

@@ -4,7 +4,9 @@
   "description": "Teacher-facing MCP server for Canvas LMS",
   "type": "module",
   "main": "dist/index.js",
-  "bin": { "canvas-teacher-mcp": "dist/index.js" },
+  "bin": {
+    "canvas-teacher-mcp": "dist/index.js"
+  },
   "engines": {
     "node": ">=20.0.0"
   },
@@ -28,6 +30,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.0",
+    "handlebars": "^4.7.8",
     "zod": "^4.3.6"
   }
 }

@@ -243,6 +243,12 @@ export function registerReportingTools(
           if (sortBy === 'engagement') {
             if (b.missing_count !== a.missing_count) return b.missing_count - a.missing_count
             if (b.late_count !== a.late_count) return b.late_count - a.late_count
+            const aScore = a.current_score
+            const bScore = b.current_score
+            if (aScore === null && bScore === null) return a.sortable_name.localeCompare(b.sortable_name)
+            if (aScore === null) return -1
+            if (bScore === null) return 1
+            if (aScore !== bScore) return aScore - bScore
             return a.sortable_name.localeCompare(b.sortable_name)
           }
           if (sortBy === 'grade') {

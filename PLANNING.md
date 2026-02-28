@@ -2,7 +2,7 @@
 
 > **Note:** This document contains design details, course codes, naming conventions, and template structures that are specific to a particular school and program. The Canvas API integration and tool architecture are general-purpose, but sections 1, 3–4, and 13 in particular reflect that specific instructional context.
 
-> **Purpose of this document:** Serves as the authoritative design reference for both human developers and AI assistants working on this codebase. All tool definitions include explicit input/output contracts and Canvas API calls so that implementation can proceed without ambiguity.
+> **Purpose of this document:** Serves as the authoritative design reference for working on this codebase. All tool definitions include explicit input/output contracts and Canvas API calls so that implementation can proceed without ambiguity.
 
 ---
 
@@ -67,7 +67,7 @@ All graded coding assignments are **Google Colab notebooks** submitted as an `on
 | Language           | TypeScript (strict mode)                  |
 | MCP Framework      | `@modelcontextprotocol/sdk`               |
 | HTTP Client        | `axios` or native `fetch` (Node 18+)      |
-| Config persistence | Local JSON file (`~/.canvas-teacher-mcp/config.json`) |
+| Config persistence | Local JSON file (`~/.config/mcp/canvas-teacher-mcp/config.json`) |
 | Template engine    | Handlebars (for HTML description templates) |
 
 ### 2.2 Project Structure
@@ -111,7 +111,7 @@ The client wraps all HTTP calls and handles:
 
 ### 2.4 Configuration Management
 
-Config is stored at `~/.canvas-teacher-mcp/config.json` and is read on server startup. Tools that modify config (e.g., `set_active_course`) write to this file immediately. The file is never checked into version control.
+Config is stored at `~/.config/mcp/canvas-teacher-mcp/config.json` and is read on server startup. Tools that modify config (e.g., `set_active_course`) write to this file immediately. The file is never checked into version control.
 
 ---
 
@@ -140,11 +140,12 @@ Config is stored at `~/.canvas-teacher-mcp/config.json` and is read on server st
     }
   },
   "defaults": {
-    "completionRequirement": "min_score",  // "min_score" | "must_submit" | "must_view"
-    "minScore": 1,                          // used when completionRequirement = "min_score"
-    "submissionType": "online_url",         // default for coding assignments
-    "exitCardPoints": 0.5,
-    "exitCardTimeLimit": 5                  // minutes
+    "assignmentGroup": "Assignments",       // Canvas assignment group for new assignments
+    "submissionType": "online_url",         // default for coding assignments (Google Colab URLs)
+    "pointsPossible": 100,                  // default points for a new assignment
+    "completionRequirement": "min_score",   // "min_score" | "must_submit" | "must_view"
+    "minScore": 1,                          // minimum score for min_score completion (attempt-based)
+    "exitCardPoints": 0.5                   // points for exit card quizzes (no time limit enforced)
   },
   "templates": {
     // See Section 4 — user-editable, overrides defaults
@@ -671,6 +672,32 @@ All tools accept an optional `course_id` parameter. If omitted, the active cours
 
 ---
 
+#### `delete_assignment`
+
+**Purpose:** Permanently delete an assignment.
+
+**Inputs:**
+- `assignment_id` (number, required).
+- `course_id` (number, optional).
+
+**Canvas API Calls:**
+- `DELETE /api/v1/courses/:id/assignments/:assignment_id`
+
+---
+
+#### `delete_quiz`
+
+**Purpose:** Permanently delete a Classic Quiz.
+
+**Inputs:**
+- `quiz_id` (number, required).
+- `course_id` (number, optional).
+
+**Canvas API Calls:**
+- `DELETE /api/v1/courses/:id/quizzes/:quiz_id`
+
+---
+
 ### 5.5 Reporting Tools
 
 All reporting tools return structured data suitable for display as a table or summary narrative. They join multiple Canvas API responses internally.
@@ -687,7 +714,7 @@ All reporting tools return structured data suitable for display as a table or su
 - `course_id` (number, optional).
 - `assignment_group_id` (number, optional): Filter submission counts to a specific assignment group.
 - `sort_by` (string, optional): `"name"` (default) | `"engagement"` | `"grade"` | `"zeros"`.
-  - `"engagement"`: `missing_count DESC`, then `late_count DESC`, then `name ASC`. Produces a standing report where most-at-risk students appear first.
+  - `"engagement"`: `missing_count DESC`, then `late_count DESC`, then `current_score ASC` (nulls first), then `name ASC`. Produces a standing report where most-at-risk students appear first.
   - `"grade"`: `current_score ASC`, nulls first, then `name ASC`. Surfaces students with the lowest (or no) grade first.
   - `"zeros"`: `zeros_count DESC`, then `name ASC`. `zeros_count` is the number of submissions where `score === 0` (explicit zero grades — a signal of non-participation).
 
@@ -891,12 +918,14 @@ See [Section 10](#10-safety--destructive-operations) for the full safety protoco
 | GET      | `/api/v1/courses/:id/assignments/:assignment_id`                      | `get_module_summary` (HTML) |
 | POST     | `/api/v1/courses/:id/assignments`                                     | `create_assignment`, `create_lesson_module` |
 | PUT      | `/api/v1/courses/:id/assignments/:assignment_id`                      | `update_assignment` |
+| DELETE   | `/api/v1/courses/:id/assignments/:assignment_id`                      | `delete_assignment` |
 | DELETE   | `/api/v1/courses/:id/assignments/:assignment_id`                      | `reset_course_sandbox` |
 | GET      | `/api/v1/courses/:id/assignment_groups`                               | `list_assignment_groups` |
 | GET      | `/api/v1/courses/:id/quizzes`                                         | `preview_course_reset` |
 | POST     | `/api/v1/courses/:id/quizzes`                                         | `create_quiz`, `create_lesson_module` |
 | POST     | `/api/v1/courses/:id/quizzes/:quiz_id/questions`                      | `create_quiz` |
 | PUT      | `/api/v1/courses/:id/quizzes/:quiz_id`                                | `update_quiz` |
+| DELETE   | `/api/v1/courses/:id/quizzes/:quiz_id`                                | `delete_quiz` |
 | DELETE   | `/api/v1/courses/:id/quizzes/:quiz_id`                                | `reset_course_sandbox` |
 | GET      | `/api/v1/courses/:id/pages`                                           | `preview_course_reset` |
 | POST     | `/api/v1/courses/:id/pages`                                           | `create_lesson_module` |
@@ -990,7 +1019,7 @@ Phases are ordered to make the server immediately useful at each stage, prioriti
 
 ---
 
-### Pre-Phase A — Unit Test Framework
+### Pre-Phase A — Unit Test Framework - COMPLETE
 
 **Do this before writing any implementation code.**
 
@@ -1022,7 +1051,7 @@ tests/
 
 ---
 
-### Pre-Phase B — Minimal Canvas Test Environment
+### Pre-Phase B — Minimal Canvas Test Environment - COMPLETE
 
 **Do this before Phase 1 implementation, in parallel with Pre-Phase A.**
 
@@ -1061,7 +1090,7 @@ npm run test:integration
 
 ---
 
-### Pre-Phase C — Full Integration Test Environment
+### Pre-Phase C — Full Integration Test Environment - COMPLETE
 
 **Do this in parallel with Phase 1, must be complete before Phase 2.**
 
@@ -1086,7 +1115,7 @@ This stage adds student accounts and the seed script so that reporting tools hav
 
 ---
 
-### Phase 1 — Foundation
+### Phase 1 — Foundation - COMPLETE
 
 **Test environment required:** Pre-Phase A + Pre-Phase B
 
@@ -1104,7 +1133,7 @@ This stage adds student accounts and the seed script so that reporting tools hav
 
 ---
 
-### Phase 2 — Read-Only Reporting
+### Phase 2 — Read-Only Reporting - COMPLETE
 
 **Test environment required:** Pre-Phase A + Pre-Phase B + Pre-Phase C (seed must be run)
 
@@ -1125,24 +1154,24 @@ This stage adds student accounts and the seed script so that reporting tools hav
 
 ---
 
-### Phase 3 — Low-Level Content Creation
+### Phase 3 — Low-Level Content Creation - COMPLETE
 
 **Test environment required:** Pre-Phase A + Pre-Phase B (reset before each integration run)
 
-- Tools: `create_assignment`, `update_assignment`, `create_quiz`, `update_quiz`.
+- Tools: `create_assignment`, `update_assignment`, `delete_assignment`, `create_quiz`, `update_quiz`, `delete_quiz`.
 - Tools: `add_module_item`, `update_module_item`, `remove_module_item`, `update_module`, `delete_module`.
 - Assignment description HTML template rendering (Handlebars).
 
 **Tests written in this phase:**
 - Unit: Handlebars template rendering (H3 + bold + link structure), input validation for all tools, `dry_run` validation path
-- Integration: `create_assignment` round-trip (create → GET → verify fields), `create_quiz` with Classic Quizzes, module item CRUD sequence
+- Integration: `create_assignment` / `delete_assignment` round-trips, `create_quiz` / `delete_quiz` round-trips, module item CRUD sequence; `afterAll` cleanup via delete tools
 - MCP protocol: write tool schema validation
 
 **Exit criterion:** Can create and modify individual assignments and module items. All Phase 3 tests pass.
 
 ---
 
-### Phase 4 — High-Level Module Creation
+### Phase 4 — High-Level Module Creation - COMPLETE
 
 **Test environment required:** Pre-Phase A + Pre-Phase B (reset before each integration run)
 
@@ -1150,12 +1179,18 @@ This stage adds student accounts and the seed script so that reporting tools hav
 - Tools: `create_lesson_module`, `create_solution_module`, `clone_module`.
 - Exit card quiz creation with config-driven question template.
 
+**New files:** `src/canvas/pages.ts`, `src/templates/index.ts`, `src/tools/modules.ts`, `tests/unit/tools/modules.test.ts`, `tests/integration/modules.test.ts`
+
+**Modified files:** `src/canvas/modules.ts` (added `page_url`), `src/canvas/assignments.ts` (added `getAssignment`), `src/canvas/quizzes.ts` (added `getQuiz`, `listQuizQuestions`), `src/index.ts` (registered `registerModuleTools`)
+
 **Tests written in this phase:**
-- Unit: template slot validation, `dry_run` output for all four template types, partial failure reporting
-- Integration: full lesson + solution module creation suites (see Section 13.2), clone module with week number substitution, `create_solution_module` lock date + prerequisite verified via GET
+- Unit: 12 tests — dry_run preview, later-standard full creation, Handlebars description rendering, exit card week substitution, partial failure reporting, create_solution_module with prerequisites, clone_module week substitution, no-active-course errors
+- Integration: full lesson + solution module creation suites, clone module with week number substitution (requires CANVAS_TEST_MODULE_ID seed)
 - MCP protocol: high-level tool schemas
 
 **Exit criterion:** Can create a complete lesson module + solution module pair from a single high-level tool call. All Phase 4 tests pass.
+
+**Result:** 110 unit tests passing (98 pre-phase + 12 new).
 
 ---
 
@@ -1231,7 +1266,7 @@ High-level tools (`create_lesson_module`, `create_solution_module`) validate the
 
 ### Scope of Destructive Tools
 
-Only `reset_course_sandbox` and `delete_module` are considered destructive. All other tools create or update but do not permanently delete course content.
+Only `reset_course_sandbox`, `delete_module`, `delete_assignment`, and `delete_quiz` are considered destructive. All other tools create or update but do not permanently delete course content.
 
 ### `reset_course_sandbox` Safety Protocol
 
@@ -1398,15 +1433,18 @@ All integration tests run against a **free Instructure Canvas account** (`https:
 
 **Seeded state after running seed script:**
 
+Due dates: A1 = 2 weeks ago, A2 = 1 week ago, A3 = 1 week from now (future), Exit card = 2 weeks ago
+
 | Student | Assignment 1 | Assignment 2 | Assignment 3 | Exit Card |
 |---|---|---|---|---|
-| Student 1 | Submitted + graded (10/10) | Submitted + graded (8/10) | Submitted, ungraded | Submitted |
-| Student 2 | Submitted + graded (7/10) | Missing | Missing | Not submitted |
-| Student 3 | Late + graded (9/10) | Submitted + graded (10/10) | Submitted, ungraded | Submitted |
-| Student 4 | Missing | Missing | Missing | Not submitted |
-| Student 5 | Submitted + graded (5/10) | Late, ungraded | Submitted + graded (10/10) | Submitted |
+| Student 1 | Late + graded (10/10) | Late + graded (8/10) | On-time, ungraded | Submitted (late, auto-graded) |
+| Student 2 | Late + graded (7/10) | Missing | On-time + graded (9/10) | Missing |
+| Student 3 | Late + graded (9/10) | Late + graded (10/10) | Not yet due | Submitted (late, auto-graded) |
+| Student 4 | Missing | Missing | Not yet due | Missing |
+| Student 5 | Late + graded (5/10) | Late, ungraded | On-time + graded (0/10) | Submitted (late, auto-graded) |
 
-This state exercises every combination that reporting tools need to handle.
+A3's future due date introduces on-time submissions and "not yet due" (non-missing) non-submissions.
+This state exercises late, on-time, missing, ungraded, graded, and zero-score combinations.
 
 **Integration test suites:**
 
