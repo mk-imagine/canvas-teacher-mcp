@@ -23,6 +23,7 @@ import {
   updateModuleItem,
   deleteModuleItem,
 } from '../canvas/modules.js'
+import { createPage, deletePage, getPage } from '../canvas/pages.js'
 
 function resolveCourseId(config: CanvasTeacherConfig, override?: number): number {
   const id = override ?? config.program.activeCourseId
@@ -555,6 +556,83 @@ export function registerContentTools(
         title: item.title,
         completion_requirement: item.completion_requirement,
       })
+    }
+  )
+
+  // ── create_page ──────────────────────────────────────────────────────────────
+
+  server.registerTool(
+    'create_page',
+    {
+      description: 'Create a new wiki page in a course.',
+      inputSchema: z.object({
+        title: z.string()
+          .describe('Page title'),
+        body: z.string().optional()
+          .describe('HTML body content.'),
+        published: z.boolean().optional()
+          .describe('Whether to publish immediately. Default false.'),
+        course_id: z.number().int().positive().optional()
+          .describe('Canvas course ID. Defaults to active course.'),
+      }),
+    },
+    async (args) => {
+      const config = configManager.read()
+      let courseId: number
+      try {
+        courseId = resolveCourseId(config, args.course_id)
+      } catch (err) {
+        return toolError((err as Error).message)
+      }
+
+      const page = await createPage(client, courseId, {
+        title: args.title,
+        body: args.body,
+        published: args.published ?? false,
+      })
+
+      return toJson({
+        page_id: page.page_id,
+        url: page.url,
+        title: page.title,
+        published: page.published,
+        front_page: page.front_page,
+      })
+    }
+  )
+
+  // ── delete_page ───────────────────────────────────────────────────────────────
+
+  server.registerTool(
+    'delete_page',
+    {
+      description: 'Permanently delete a wiki page.',
+      inputSchema: z.object({
+        page_url: z.string()
+          .describe('Page URL slug (e.g. "week-2-overview"). Returned by create_page as the "url" field.'),
+        course_id: z.number().int().positive().optional()
+          .describe('Canvas course ID. Defaults to active course.'),
+      }),
+    },
+    async (args) => {
+      const config = configManager.read()
+      let courseId: number
+      try {
+        courseId = resolveCourseId(config, args.course_id)
+      } catch (err) {
+        return toolError((err as Error).message)
+      }
+
+      const page = await getPage(client, courseId, args.page_url)
+      if (page.front_page) {
+        return toolError(
+          `Cannot delete "${args.page_url}" because it is the course front page. ` +
+          `Assign a different front page in Canvas first, then retry.`
+        )
+      }
+
+      await deletePage(client, courseId, args.page_url)
+      return toJson({ deleted: true, page_url: args.page_url })
     }
   )
 

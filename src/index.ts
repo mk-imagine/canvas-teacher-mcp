@@ -6,6 +6,7 @@ import { registerContextTools } from './tools/context.js'
 import { registerReportingTools } from './tools/reporting.js'
 import { registerContentTools } from './tools/content.js'
 import { registerModuleTools } from './tools/modules.js'
+import { registerResetTools } from './tools/reset.js'
 
 async function main() {
   const configManager = new ConfigManager()
@@ -16,6 +17,7 @@ async function main() {
   registerReportingTools(server, client, configManager)
   registerContentTools(server, client, configManager)
   registerModuleTools(server, client, configManager)
+  registerResetTools(server, client, configManager)
   await server.connect(new StdioServerTransport())
 }
 

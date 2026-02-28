@@ -55,6 +55,16 @@ export async function updateAssignment(
   )
 }
 
+export async function listAssignments(
+  client: CanvasClient,
+  courseId: number
+): Promise<CanvasAssignmentFull[]> {
+  return client.get<CanvasAssignmentFull>(
+    `/api/v1/courses/${courseId}/assignments`,
+    { per_page: '100' }
+  )
+}
+
 export async function getAssignment(
   client: CanvasClient,
   courseId: number,

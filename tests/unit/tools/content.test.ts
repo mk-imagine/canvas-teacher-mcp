@@ -52,6 +52,15 @@ const MOCK_QUIZ_QUESTION = {
   position: 1,
 }
 
+const MOCK_PAGE = {
+  page_id: 801,
+  url: 'week-1-overview',
+  title: 'Week 1 Overview',
+  body: '<p>Welcome</p>',
+  published: false,
+  front_page: false,
+}
+
 const MOCK_MODULE = {
   id: 10,
   name: 'Week 1: Introduction',
@@ -656,5 +665,118 @@ describe('remove_module_item', () => {
     )
     expect(data.deleted).toBe(true)
     expect(data.item_id).toBe(201)
+  })
+})
+
+// ─── create_page ─────────────────────────────────────────────────────────────
+
+describe('create_page', () => {
+  it('returns created page with url slug and fields', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath)
+    mswServer.use(
+      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/pages`, () =>
+        HttpResponse.json(MOCK_PAGE, { status: 200 })
+      )
+    )
+    const { mcpClient } = await makeTestClient(configPath)
+    const data = parseResult(
+      await mcpClient.callTool({
+        name: 'create_page',
+        arguments: { title: 'Week 1 Overview' },
+      })
+    )
+    expect(data.page_id).toBe(801)
+    expect(data.url).toBe('week-1-overview')
+    expect(data.title).toBe('Week 1 Overview')
+    expect(data.published).toBe(false)
+  })
+
+  it('sends body and published fields when provided', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath)
+    let capturedBody: Record<string, unknown> = {}
+    mswServer.use(
+      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/pages`, async ({ request }) => {
+        capturedBody = await request.json() as Record<string, unknown>
+        return HttpResponse.json({ ...MOCK_PAGE, published: true }, { status: 200 })
+      })
+    )
+    const { mcpClient } = await makeTestClient(configPath)
+    await mcpClient.callTool({
+      name: 'create_page',
+      arguments: { title: 'Week 1 Overview', body: '<p>Hello</p>', published: true },
+    })
+    const body = capturedBody as { wiki_page: Record<string, unknown> }
+    expect(body.wiki_page.body).toBe('<p>Hello</p>')
+    expect(body.wiki_page.published).toBe(true)
+  })
+
+  it('returns error when no active course is set', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath, { program: { activeCourseId: null, courseCodes: [], courseCache: {} } })
+    const { mcpClient } = await makeTestClient(configPath)
+    const result = await mcpClient.callTool({
+      name: 'create_page',
+      arguments: { title: 'Test Page' },
+    })
+    const text = (result.content as Array<{ type: string; text: string }>)[0].text
+    expect(text).toContain('No active course')
+  })
+})
+
+// ─── delete_page ─────────────────────────────────────────────────────────────
+
+describe('delete_page', () => {
+  it('returns deleted=true and page_url on success', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath)
+    mswServer.use(
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/pages/week-1-overview`, () =>
+        HttpResponse.json(MOCK_PAGE)  // front_page: false
+      ),
+      http.delete(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/pages/week-1-overview`, () =>
+        new HttpResponse(null, { status: 204 })
+      )
+    )
+    const { mcpClient } = await makeTestClient(configPath)
+    const data = parseResult(
+      await mcpClient.callTool({
+        name: 'delete_page',
+        arguments: { page_url: 'week-1-overview' },
+      })
+    )
+    expect(data.deleted).toBe(true)
+    expect(data.page_url).toBe('week-1-overview')
+  })
+
+  it('returns error when page is the course front page', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath)
+    mswServer.use(
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/pages/week-1-overview`, () =>
+        HttpResponse.json({ ...MOCK_PAGE, front_page: true })
+      )
+    )
+    const { mcpClient } = await makeTestClient(configPath)
+    const result = await mcpClient.callTool({
+      name: 'delete_page',
+      arguments: { page_url: 'week-1-overview' },
+    })
+    const text = (result.content as Array<{ type: string; text: string }>)[0].text
+    expect(text).toContain('front page')
+    expect(text).toContain('week-1-overview')
+  })
+
+  it('returns error when no active course is set', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath, { program: { activeCourseId: null, courseCodes: [], courseCache: {} } })
+    const { mcpClient } = await makeTestClient(configPath)
+    const result = await mcpClient.callTool({
+      name: 'delete_page',
+      arguments: { page_url: 'week-1-overview' },
+    })
+    const text = (result.content as Array<{ type: string; text: string }>)[0].text
+    expect(text).toContain('No active course')
   })
 })

@@ -74,12 +74,13 @@ function parseResult(result: Awaited<ReturnType<Client['callTool']>>) {
   return JSON.parse(text)
 }
 
-// Assignments and quizzes created during tests are tracked for afterAll cleanup
+// Assignments, quizzes, and pages created during tests are tracked for afterAll cleanup
 const createdAssignmentIds: number[] = []
 const createdQuizIds: number[] = []
+const createdPageUrls: string[] = []
 
 afterAll(async () => {
-  if (createdAssignmentIds.length === 0 && createdQuizIds.length === 0) return
+  if (createdAssignmentIds.length === 0 && createdQuizIds.length === 0 && createdPageUrls.length === 0) return
   const configPath = makeTmpConfigPath()
   makeConfig(configPath)
   const { mcpClient } = await makeIntegrationClient(configPath)
@@ -89,7 +90,10 @@ afterAll(async () => {
   for (const id of createdQuizIds) {
     await mcpClient.callTool({ name: 'delete_quiz', arguments: { quiz_id: id } })
   }
-  console.log(`  Cleanup: deleted ${createdAssignmentIds.length} assignments, ${createdQuizIds.length} quizzes`)
+  for (const url of createdPageUrls) {
+    await mcpClient.callTool({ name: 'delete_page', arguments: { page_url: url } })
+  }
+  console.log(`  Cleanup: deleted ${createdAssignmentIds.length} assignments, ${createdQuizIds.length} quizzes, ${createdPageUrls.length} pages`)
 })
 
 // ─── create_assignment ────────────────────────────────────────────────────────
@@ -431,5 +435,96 @@ describe('Integration: delete_quiz', () => {
     expect(data.deleted).toBe(true)
     expect(data.quiz_id).toBe(created.id)
     console.log(`  Deleted quiz id=${created.id}`)
+  })
+})
+
+// ─── create_page ──────────────────────────────────────────────────────────────
+
+describe('Integration: create_page', () => {
+  it('creates a page and verifies fields round-trip', async () => {
+    const configPath = makeTmpConfigPath()
+    makeConfig(configPath)
+    const { mcpClient } = await makeIntegrationClient(configPath)
+
+    const data = parseResult(
+      await mcpClient.callTool({
+        name: 'create_page',
+        arguments: {
+          title: '[MCP TEST] Integration Page',
+          body: '<p>Hello from integration test.</p>',
+          published: false,
+        },
+      })
+    )
+
+    expect(data.page_id).toBeTypeOf('number')
+    expect(data.title).toBe('[MCP TEST] Integration Page')
+    expect(data.published).toBe(false)
+    expect(data.front_page).toBe(false)
+    expect(typeof data.url).toBe('string')
+
+    createdPageUrls.push(data.url)
+    console.log(`  Created page url="${data.url}": "${data.title}"`)
+  })
+})
+
+// ─── delete_page ──────────────────────────────────────────────────────────────
+
+describe('Integration: delete_page', () => {
+  it('creates a page then deletes it', async () => {
+    const configPath = makeTmpConfigPath()
+    makeConfig(configPath)
+    const { mcpClient } = await makeIntegrationClient(configPath)
+
+    const created = parseResult(
+      await mcpClient.callTool({
+        name: 'create_page',
+        arguments: { title: '[MCP TEST] To Be Deleted Page', published: false },
+      })
+    )
+    console.log(`  Created page url="${created.url}"`)
+
+    const data = parseResult(
+      await mcpClient.callTool({
+        name: 'delete_page',
+        arguments: { page_url: created.url },
+      })
+    )
+
+    expect(data.deleted).toBe(true)
+    expect(data.page_url).toBe(created.url)
+    console.log(`  Deleted page url="${created.url}"`)
+  })
+
+  it('returns error when attempting to delete the course front page', async () => {
+    const configPath = makeTmpConfigPath()
+    makeConfig(configPath)
+    const { mcpClient } = await makeIntegrationClient(configPath)
+
+    // Create a page and promote it to front page via canvas directly
+    const { createPage, updatePage, deletePage } = await import('../../src/canvas/pages.js')
+    const canvasClient = new CanvasClient({ instanceUrl, apiToken })
+    const page = await createPage(canvasClient, testCourseId, {
+      title: '[MCP TEST] Temp Front Page',
+      body: '<p>Temporary front page for testing.</p>',
+      published: true,
+    })
+    await updatePage(canvasClient, testCourseId, page.url, { front_page: true })
+    console.log(`  Promoted page to front page: url="${page.url}"`)
+
+    // Attempt deletion via the MCP tool — should fail
+    const result = await mcpClient.callTool({
+      name: 'delete_page',
+      arguments: { page_url: page.url },
+    })
+    const text = (result.content as Array<{ type: string; text: string }>)[0].text
+    expect(text).toContain('front page')
+    expect(text).toContain(page.url)
+    console.log(`  Correctly rejected deletion of front page`)
+
+    // Cleanup: unset front page designation then delete directly
+    await updatePage(canvasClient, testCourseId, page.url, { front_page: false })
+    await deletePage(canvasClient, testCourseId, page.url)
+    console.log(`  Cleaned up test front page`)
   })
 })

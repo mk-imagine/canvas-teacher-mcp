@@ -6,6 +6,19 @@ export interface CanvasPage {
   title: string
   body: string | null
   published: boolean
+  front_page: boolean
+}
+
+export async function updatePage(
+  client: CanvasClient,
+  courseId: number,
+  pageUrl: string,
+  params: { title?: string; body?: string; published?: boolean; front_page?: boolean }
+): Promise<CanvasPage> {
+  return client.put<CanvasPage>(
+    `/api/v1/courses/${courseId}/pages/${pageUrl}`,
+    { wiki_page: params }
+  )
 }
 
 export async function createPage(
@@ -17,6 +30,24 @@ export async function createPage(
     `/api/v1/courses/${courseId}/pages`,
     { wiki_page: params }
   )
+}
+
+export async function listPages(
+  client: CanvasClient,
+  courseId: number
+): Promise<CanvasPage[]> {
+  return client.get<CanvasPage>(
+    `/api/v1/courses/${courseId}/pages`,
+    { per_page: '100' }
+  )
+}
+
+export async function deletePage(
+  client: CanvasClient,
+  courseId: number,
+  pageUrl: string
+): Promise<void> {
+  return client.delete(`/api/v1/courses/${courseId}/pages/${pageUrl}`)
 }
 
 export async function getPage(

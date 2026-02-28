@@ -8,6 +8,10 @@ export interface CanvasCourse {
   term?: { name: string }
 }
 
+export async function getCourse(client: CanvasClient, courseId: number): Promise<CanvasCourse> {
+  return client.getOne<CanvasCourse>(`/api/v1/courses/${courseId}`)
+}
+
 export async function fetchTeacherCourses(client: CanvasClient): Promise<CanvasCourse[]> {
   return client.get<CanvasCourse>('/api/v1/courses', {
     enrollment_type: 'teacher',

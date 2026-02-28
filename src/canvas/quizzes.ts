@@ -88,6 +88,16 @@ export async function createQuizQuestion(
   )
 }
 
+export async function listQuizzes(
+  client: CanvasClient,
+  courseId: number
+): Promise<CanvasQuiz[]> {
+  return client.get<CanvasQuiz>(
+    `/api/v1/courses/${courseId}/quizzes`,
+    { per_page: '100' }
+  )
+}
+
 export async function getQuiz(
   client: CanvasClient,
   courseId: number,

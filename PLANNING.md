@@ -81,17 +81,17 @@ canvas-teacher-mcp/
 │   │   ├── modules.ts        # Module & module item API calls
 │   │   ├── assignments.ts    # Assignment API calls
 │   │   ├── quizzes.ts        # Classic Quiz API calls
+│   │   ├── pages.ts          # Page API calls (CRUD + front page handling)
 │   │   ├── submissions.ts    # Submission & grade API calls
 │   │   └── courses.ts        # Course & enrollment API calls
 │   ├── tools/
 │   │   ├── context.ts        # Course management tools
-│   │   ├── modules.ts        # High-level & low-level module tools
-│   │   ├── assignments.ts    # Assignment & quiz tools
+│   │   ├── content.ts        # Low-level CRUD tools (assignments, quizzes, pages, modules, module items)
+│   │   ├── modules.ts        # High-level module creation tools (lesson, solution, clone)
 │   │   ├── reporting.ts      # Grade & submission reporting tools
-│   │   └── sandbox.ts        # Destructive reset tools
+│   │   └── reset.ts          # Destructive reset tools
 │   ├── templates/
 │   │   ├── index.ts          # Template loader & renderer
-│   │   └── defaults.ts       # Default template definitions
 │   └── config/
 │       ├── schema.ts         # Config type definitions
 │       └── manager.ts        # Read/write config file
@@ -698,6 +698,39 @@ All tools accept an optional `course_id` parameter. If omitted, the active cours
 
 ---
 
+#### `create_page`
+
+**Purpose:** Create a new wiki page in a course.
+
+**Inputs:**
+- `title` (string, required): Page title.
+- `body` (string, optional): HTML body content.
+- `published` (boolean, optional): Whether to publish immediately. Default `false`.
+- `course_id` (number, optional).
+
+**Output:** `{ page_id, url, title, published, front_page }`
+
+**Canvas API Calls:**
+- `POST /api/v1/courses/:id/pages`
+
+---
+
+#### `delete_page`
+
+**Purpose:** Permanently delete a wiki page. Refuses to delete the course front page — the user must reassign the front page in Canvas first.
+
+**Inputs:**
+- `page_url` (string, required): Page URL slug (e.g. `"week-2-overview"`). Returned by `create_page` as the `url` field.
+- `course_id` (number, optional).
+
+**Canvas API Calls:**
+- `GET /api/v1/courses/:id/pages/:url` — fetch page to check `front_page` status
+- `DELETE /api/v1/courses/:id/pages/:url`
+
+**Front page guard:** If `page.front_page === true`, returns an error message instructing the user to reassign the front page first. This prevents accidental deletion of the course home page.
+
+---
+
 ### 5.5 Reporting Tools
 
 All reporting tools return structured data suitable for display as a table or summary narrative. They join multiple Canvas API responses internally.
@@ -848,7 +881,7 @@ See [Section 10](#10-safety--destructive-operations) for the full safety protoco
 
 #### `preview_course_reset`
 
-**Purpose:** Dry run — list all content that would be deleted by `reset_course_sandbox`. Does not modify anything.
+**Purpose:** Dry run — list all content that would be deleted by `reset_course`. Does not modify anything.
 
 **Inputs:**
 - `course_id` (number, optional).
@@ -867,7 +900,7 @@ See [Section 10](#10-safety--destructive-operations) for the full safety protoco
     "enrollments": 22,
     "files": "not touched"
   },
-  "warning": "This action cannot be undone. Run reset_course_sandbox with confirmation_text = \"CSC 408 Sandbox\" to proceed."
+  "warning": "This action cannot be undone. Run reset_course with confirmation_text = \"CSC 408 Sandbox\" to proceed."
 }
 ```
 
@@ -879,7 +912,7 @@ See [Section 10](#10-safety--destructive-operations) for the full safety protoco
 
 ---
 
-#### `reset_course_sandbox`
+#### `reset_course`
 
 **Purpose:** Permanently delete all modules, assignments, quizzes, and pages from a course. Preserves student enrollments and files.
 
@@ -893,10 +926,10 @@ See [Section 10](#10-safety--destructive-operations) for the full safety protoco
 1. `GET /api/v1/courses/:id` — fetch course name and validate `confirmation_text`
 2. `GET /api/v1/courses/:id/modules` → `DELETE /api/v1/courses/:id/modules/:id` for each
 3. `GET /api/v1/courses/:id/assignments` → `DELETE /api/v1/courses/:id/assignments/:id` for each
-4. `GET /api/v1/courses/:id/quizzes` → `DELETE /api/v1/courses/:id/quizzes/:id` for each
-5. `GET /api/v1/courses/:id/pages` → `DELETE /api/v1/courses/:id/pages/:url` for each
+4. `GET /api/v1/courses/:id/quizzes` → `DELETE /api/v1/courses/:id/quizzes/:id` for each (note: quiz-backed assignments are already deleted in step 3, so most will 404 — handled gracefully)
+5. `GET /api/v1/courses/:id/pages` → for each page: if `front_page === true`, `PUT /pages/:url` with `{ front_page: false }` first, then `DELETE /api/v1/courses/:id/pages/:url`
 
-**Notes:** Deletion happens in the order listed. Module deletion removes module structure but not underlying content objects; Steps 3–5 clean those up. See Section 10 for additional safety guards.
+**Notes:** Deletion happens in the order listed. Module deletion removes module structure but not underlying content objects; Steps 3–5 clean those up. Step 5 auto-unsets front page designation before deleting — Canvas forbids deleting the front page directly. See Section 10 for additional safety guards.
 
 ---
 
@@ -905,11 +938,11 @@ See [Section 10](#10-safety--destructive-operations) for the full safety protoco
 | Method   | Endpoint                                                              | Used By |
 |----------|-----------------------------------------------------------------------|---------|
 | GET      | `/api/v1/courses`                                                     | `list_courses` |
-| GET      | `/api/v1/courses/:id`                                                 | `set_active_course`, `reset_course_sandbox` |
+| GET      | `/api/v1/courses/:id`                                                 | `set_active_course`, `reset_course` |
 | GET      | `/api/v1/courses/:id/modules`                                         | `list_modules`, `preview_course_reset` |
 | POST     | `/api/v1/courses/:id/modules`                                         | `create_lesson_module`, `create_solution_module` |
 | PUT      | `/api/v1/courses/:id/modules/:module_id`                              | `update_module`, publish/unpublish |
-| DELETE   | `/api/v1/courses/:id/modules/:module_id`                              | `delete_module`, `reset_course_sandbox` |
+| DELETE   | `/api/v1/courses/:id/modules/:module_id`                              | `delete_module`, `reset_course` |
 | GET      | `/api/v1/courses/:id/modules/:module_id/items`                        | `get_module_summary` |
 | POST     | `/api/v1/courses/:id/modules/:module_id/items`                        | `add_module_item`, `create_lesson_module` |
 | PUT      | `/api/v1/courses/:id/modules/:module_id/items/:item_id`               | `update_module_item` |
@@ -918,18 +951,18 @@ See [Section 10](#10-safety--destructive-operations) for the full safety protoco
 | GET      | `/api/v1/courses/:id/assignments/:assignment_id`                      | `get_module_summary` (HTML) |
 | POST     | `/api/v1/courses/:id/assignments`                                     | `create_assignment`, `create_lesson_module` |
 | PUT      | `/api/v1/courses/:id/assignments/:assignment_id`                      | `update_assignment` |
-| DELETE   | `/api/v1/courses/:id/assignments/:assignment_id`                      | `delete_assignment` |
-| DELETE   | `/api/v1/courses/:id/assignments/:assignment_id`                      | `reset_course_sandbox` |
+| DELETE   | `/api/v1/courses/:id/assignments/:assignment_id`                      | `delete_assignment`, `reset_course` |
 | GET      | `/api/v1/courses/:id/assignment_groups`                               | `list_assignment_groups` |
 | GET      | `/api/v1/courses/:id/quizzes`                                         | `preview_course_reset` |
 | POST     | `/api/v1/courses/:id/quizzes`                                         | `create_quiz`, `create_lesson_module` |
 | POST     | `/api/v1/courses/:id/quizzes/:quiz_id/questions`                      | `create_quiz` |
 | PUT      | `/api/v1/courses/:id/quizzes/:quiz_id`                                | `update_quiz` |
-| DELETE   | `/api/v1/courses/:id/quizzes/:quiz_id`                                | `delete_quiz` |
-| DELETE   | `/api/v1/courses/:id/quizzes/:quiz_id`                                | `reset_course_sandbox` |
-| GET      | `/api/v1/courses/:id/pages`                                           | `preview_course_reset` |
-| POST     | `/api/v1/courses/:id/pages`                                           | `create_lesson_module` |
-| DELETE   | `/api/v1/courses/:id/pages/:url`                                      | `reset_course_sandbox` |
+| DELETE   | `/api/v1/courses/:id/quizzes/:quiz_id`                                | `delete_quiz`, `reset_course` |
+| GET      | `/api/v1/courses/:id/pages`                                           | `preview_course_reset`, `reset_course` |
+| GET      | `/api/v1/courses/:id/pages/:url`                                      | `delete_page` |
+| POST     | `/api/v1/courses/:id/pages`                                           | `create_page`, `create_lesson_module` |
+| PUT      | `/api/v1/courses/:id/pages/:url`                                      | `reset_course` (unset front page before delete) |
+| DELETE   | `/api/v1/courses/:id/pages/:url`                                      | `delete_page`, `reset_course` |
 | GET      | `/api/v1/courses/:id/enrollments`                                     | `get_class_grade_summary`, `get_student_report` |
 | GET      | `/api/v1/courses/:id/students/submissions`                            | `get_class_grade_summary`, `get_missing_assignments`, `get_late_assignments`, `get_student_report` |
 | GET      | `/api/v1/courses/:id/assignments/:assignment_id/submissions`          | `get_assignment_breakdown` |
@@ -1159,12 +1192,14 @@ This stage adds student accounts and the seed script so that reporting tools hav
 **Test environment required:** Pre-Phase A + Pre-Phase B (reset before each integration run)
 
 - Tools: `create_assignment`, `update_assignment`, `delete_assignment`, `create_quiz`, `update_quiz`, `delete_quiz`.
+- Tools: `create_page`, `delete_page`.
 - Tools: `add_module_item`, `update_module_item`, `remove_module_item`, `update_module`, `delete_module`.
 - Assignment description HTML template rendering (Handlebars).
+- Front page guard: `delete_page` checks `front_page` status and refuses deletion if the page is the course front page.
 
 **Tests written in this phase:**
-- Unit: Handlebars template rendering (H3 + bold + link structure), input validation for all tools, `dry_run` validation path
-- Integration: `create_assignment` / `delete_assignment` round-trips, `create_quiz` / `delete_quiz` round-trips, module item CRUD sequence; `afterAll` cleanup via delete tools
+- Unit: Handlebars template rendering (H3 + bold + link structure), input validation for all tools, `dry_run` validation path, `delete_page` front page rejection
+- Integration: `create_assignment` / `delete_assignment` round-trips, `create_quiz` / `delete_quiz` round-trips, `create_page` / `delete_page` round-trips (including front page rejection), module item CRUD sequence; `afterAll` cleanup via delete tools
 - MCP protocol: write tool schema validation
 
 **Exit criterion:** Can create and modify individual assignments and module items. All Phase 3 tests pass.
@@ -1194,19 +1229,25 @@ This stage adds student accounts and the seed script so that reporting tools hav
 
 ---
 
-### Phase 5 — Destructive Operations
+### Phase 5 — Destructive Operations - COMPLETE
 
 **Test environment required:** Pre-Phase A + Pre-Phase B (integration tests rely on resetting the test course)
 
-- Tools: `preview_course_reset`, `reset_course_sandbox`.
+- Tools: `preview_course_reset`, `reset_course`.
 - Full confirmation safety protocol (see Section 10).
+- Front page auto-unset: `reset_course` calls `PUT /pages/:url` with `{ front_page: false }` before deleting any page marked as the front page.
+
+**New files:** `src/tools/reset.ts`, `tests/unit/tools/reset.test.ts`, `tests/integration/reset.test.ts`
+
+**Modified files:** `src/index.ts` (registerResetTools), `src/canvas/courses.ts` (getCourse), `src/canvas/pages.ts` (added `front_page` to `CanvasPage`, added `updatePage`, `getPage`)
 
 **Tests written in this phase:**
-- Unit: confirmation text matching (case-sensitive), wrong text rejection
-- Integration: `preview_course_reset` counts match actual content; `reset_course_sandbox` with wrong confirmation text rejected; with correct text, all modules/assignments/quizzes/pages deleted; enrollments and files preserved
-- MCP protocol: destructive tool schemas
+- Unit: preview counts, confirmation text matching (case-sensitive), wrong text rejection, sandbox warning, no-active-course errors, front page auto-unset before deletion (9 tests)
+- Integration: `preview_course_reset` counts match actual content; `reset_course` with wrong confirmation text rejected (verifies counts unchanged); `reset_course` with correct text deletes all content including explicitly created front page (verifies post-reset all zeros); `afterAll` reseeds test course via `npm run seed`
 
-**Exit criterion:** Can safely clear a sandbox course with explicit confirmation. All Phase 5 tests pass.
+**Result:** 125 unit tests + 60 integration tests (all passing)
+
+**Exit criterion:** Can safely clear a course with explicit confirmation, including front page handling. All Phase 5 tests pass.
 
 ---
 
@@ -1239,7 +1280,7 @@ See [Section 14](#14-ferpa-pii-blinding) for full design details.
 
 ### Principle: Partial Success is Better Than Silent Failure
 
-For multi-step operations (`create_lesson_module`, `reset_course_sandbox`), if an intermediate step fails:
+For multi-step operations (`create_lesson_module`, `reset_course`), if an intermediate step fails:
 - **Do not attempt rollback.** Rollback is complex, error-prone, and may itself fail.
 - **Do not silently continue.** Skipping a failed item and proceeding can leave content in an inconsistent state.
 - **Report exactly what was completed and where it stopped.** Include the Canvas IDs of everything created so far so the instructor can manually remediate or the AI can continue.
@@ -1266,15 +1307,19 @@ High-level tools (`create_lesson_module`, `create_solution_module`) validate the
 
 ### Scope of Destructive Tools
 
-Only `reset_course_sandbox`, `delete_module`, `delete_assignment`, and `delete_quiz` are considered destructive. All other tools create or update but do not permanently delete course content.
+Only `reset_course`, `delete_module`, `delete_assignment`, `delete_quiz`, and `delete_page` are considered destructive. All other tools create or update but do not permanently delete course content.
 
-### `reset_course_sandbox` Safety Protocol
+### `reset_course` Safety Protocol
 
 1. **Naming guard:** Before calling this tool, the AI must call `preview_course_reset` and show the output to the user.
 2. **Confirmation text:** The tool requires `confirmation_text` to exactly match the Canvas course name (case-sensitive, character-for-character). The AI must ask the user to type the name explicitly.
-3. **Sandbox hint:** The tool logs a warning if the course name does not contain the word "sandbox" or "Sandbox", but does not block execution — the confirmation text is the only enforcement gate.
-4. **Enrollment preservation:** Student enrollment records and file uploads are never touched.
-5. **No cascade to files:** Canvas file objects in the Files section are not deleted.
+3. **Enrollment preservation:** Student enrollment records and file uploads are never touched.
+4. **No cascade to files:** Canvas file objects in the Files section are not deleted.
+5. **Front page handling:** Before deleting pages, `reset_course` automatically unsets any front page designation via `PUT /pages/:url` with `{ front_page: false }`. This is necessary because Canvas forbids deleting the front page directly.
+
+### `delete_page` Front Page Guard
+
+`delete_page` fetches the page via `GET /pages/:url` before deletion. If `front_page === true`, the tool returns an error instructing the user to reassign the front page first. Unlike `reset_course` (which auto-unsets), the single-page tool requires explicit user action to avoid accidental front page removal.
 
 ### Example Safe Invocation Sequence (for AI assistants)
 
@@ -1283,7 +1328,7 @@ Only `reset_course_sandbox`, `delete_module`, `delete_assignment`, and `delete_q
 2. Show the user the full output including the warning message
 3. Ask the user: "To confirm, please type the exact course name shown above."
 4. User types: "CSC 408 Sandbox — Spring 2025"
-5. Call reset_course_sandbox(course_id=12345, confirmation_text="CSC 408 Sandbox — Spring 2025")
+5. Call reset_course(course_id=12345, confirmation_text="CSC 408 Sandbox — Spring 2025")
 ```
 
 ---
@@ -1342,7 +1387,7 @@ These are explicitly planned future capabilities, documented here so that design
 | `login_id` not exposed on free accounts | `GET /api/v1/users/self` does not return `login_id` on canvas.instructure.com free accounts. Not a functional issue — `id` is used for all API operations. |
 | Canvas Studio | Videos must be embedded manually post-creation. The API does not expose a public endpoint for creating Studio media items programmatically. |
 | Content Migrations async | The Canvas Content Migrations API (used for full course copy) is asynchronous — it returns a job ID and the result is available later. `clone_module` avoids this by re-creating objects directly via the item-level APIs, which is synchronous but slower for large modules. |
-| `reset_content` endpoint | Canvas has a `DELETE /api/v1/courses/:id/reset_content` endpoint but it typically requires admin permissions and resets enrollments too. The surgical deletion approach in `reset_course_sandbox` is used instead. |
+| `reset_content` endpoint | Canvas has a `DELETE /api/v1/courses/:id/reset_content` endpoint but it typically requires admin permissions and resets enrollments too. The surgical deletion approach in `reset_course` is used instead. |
 | Rate limits | Canvas imposes rate limits that vary by institution. The client applies conservative delays but very large batch operations (e.g., full sandbox reset on a large course) may hit limits and require retries. |
 | Submission URL validation | Canvas does not validate that a submitted URL is actually a valid Colab notebook. The tool cannot enforce correct submission format. |
 | Pagination maximum | Canvas caps per-page results at 100. Courses with more than 100 items of any type (assignments, students, etc.) require multiple paginated requests, which is handled automatically by the client. |
@@ -1404,8 +1449,17 @@ All integration tests run against a **free Instructure Canvas account** (`https:
 | | Validation: missing `instanceUrl` or `apiToken` returns clear error |
 | Input validation | Tools reject missing required fields before any API call |
 | | `dry_run: true` performs validation only, returns what would be created |
+| Page tools | `create_page` returns `page_id`, `url`, `title`, `published`, `front_page` |
+| | `delete_page` fetches page first to check `front_page` status |
+| | `delete_page` returns error when page is the course front page |
+| Reset tools | `preview_course_reset` returns correct counts |
+| | `reset_course` confirmation text matching (case-sensitive) |
+| | `reset_course` rejects wrong confirmation text |
+| | `reset_course` auto-unsets front page designation before deleting pages |
 
 **Run command:** `npm test` (runs on every push, no credentials required)
+
+**Result:** 125 unit tests passing
 
 ---
 
@@ -1418,7 +1472,7 @@ All integration tests run against a **free Instructure Canvas account** (`https:
 **Run command:** `npm run test:integration` (requires `.env.test` — opt-in only)
 
 **State management strategy:**
-- Each test suite begins by calling `reset_course_sandbox` on the test course to establish a clean slate
+- Each test suite begins by calling `reset_course` on the test course to establish a clean slate
 - The reset itself is validated as part of the suite setup (confirming the course is empty after reset)
 - After reset, a **seed script** (`scripts/seed-test-data.ts`) creates a known content state
 - Tests then run assertions against that known state
@@ -1458,7 +1512,12 @@ This state exercises late, on-time, missing, ungraded, graded, and zero-score co
 | **Clone module** | Clones a module from a second test course; verifies item titles, types, and positions match source with week number substituted |
 | **Grade reporting** | `get_class_grade_summary` returns correct scores and missing counts matching seeded state; `get_assignment_breakdown` shows correct per-student data; `get_student_report` for Student 4 shows all missing |
 | **Missing/late reporting** | `get_missing_assignments` returns Students 2, 4 with correct assignment lists; `get_late_assignments` returns Students 3, 5 |
-| **Sandbox reset** | `preview_course_reset` lists correct counts; `reset_course_sandbox` with wrong confirmation text is rejected; with correct text, all modules/assignments/quizzes/pages deleted; enrollments preserved |
+| **Page CRUD** | `create_page` round-trip verifies `page_id`, `title`, `published`, `front_page`, `url`; `delete_page` creates then deletes a page; `delete_page` returns error when page is the course front page (create → promote to front page → attempt delete → verify rejection → cleanup) |
+| **Course reset** | `preview_course_reset` lists correct counts; `reset_course` with wrong confirmation text is rejected (counts unchanged); with correct text, deletes all content including explicitly created front page (auto-unset + delete); post-reset all counts zero; `afterAll` reseeds course via `npm run seed` |
+
+**Run command:** `npm run test:integration` (requires `.env.test`)
+
+**Result:** 60 integration tests passing (6 test files: connectivity, context, reporting, content, modules, reset)
 
 ---
 
