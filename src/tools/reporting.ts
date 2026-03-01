@@ -16,6 +16,7 @@ import {
   fetchAssignment,
   fetchAssignmentGroups,
 } from '../canvas/submissions.js'
+import { SecureStore } from '../security/secure-store.js'
 
 function resolveCourseId(config: CanvasTeacherConfig, override?: number): number {
   const id = override ?? config.program.activeCourseId
@@ -33,10 +34,37 @@ function toJson(value: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] }
 }
 
+/**
+ * Builds a two-block response for PII-blinded data.
+ * content[0]: blinded JSON for the assistant (no real names or IDs)
+ * content[1]: lookup table of token → name for the user only
+ */
+function blindedResponse(blindedData: unknown, store: SecureStore) {
+  const lookupLines = store.listTokens().map(token => {
+    const resolved = store.resolve(token)!
+    return `${token} → ${resolved.name}`
+  })
+  return {
+    content: [
+      {
+        type: 'text' as const,
+        text: JSON.stringify(blindedData, null, 2),
+        annotations: { audience: ['assistant' as const] },
+      },
+      {
+        type: 'text' as const,
+        text: 'Student lookup (current session):\n' + lookupLines.join('\n'),
+        annotations: { audience: ['user' as const] },
+      },
+    ],
+  }
+}
+
 export function registerReportingTools(
   server: McpServer,
   client: CanvasClient,
-  configManager: ConfigManager
+  configManager: ConfigManager,
+  secureStore: SecureStore,
 ): void {
   // ── list_modules ────────────────────────────────────────────────────────────
 
@@ -222,6 +250,7 @@ export function registerReportingTools(
 
       const sortBy = args.sort_by ?? 'name'
 
+      // Build and sort on real data before tokenizing (preserves sort order)
       const students = enrollments
         .map((enrollment) => {
           const subs = subsByUser.get(enrollment.user_id) ?? []
@@ -268,13 +297,27 @@ export function registerReportingTools(
           return a.sortable_name.localeCompare(b.sortable_name)
         })
 
-      return toJson({
+      // Tokenize after sorting so order is preserved
+      const blindedStudents = students.map((s) => {
+        const token = secureStore.tokenize(s.id, s.name)
+        return {
+          student: token,
+          current_score: s.current_score,
+          final_score: s.final_score,
+          missing_count: s.missing_count,
+          late_count: s.late_count,
+          ungraded_count: s.ungraded_count,
+          zeros_count: s.zeros_count,
+        }
+      })
+
+      return blindedResponse({
         course_id: courseId,
         as_of: new Date().toISOString(),
         sort_by: sortBy,
-        student_count: students.length,
-        students,
-      })
+        student_count: blindedStudents.length,
+        students: blindedStudents,
+      }, secureStore)
     }
   )
 
@@ -305,6 +348,7 @@ export function registerReportingTools(
         fetchAssignmentSubmissions(client, courseId, args.assignment_id),
       ])
 
+      // Sort on real names before tokenizing
       const submissionRows = submissions
         .map((s) => ({
           student_name: s.user?.name ?? `User ${s.user_id}`,
@@ -318,6 +362,19 @@ export function registerReportingTools(
         }))
         .sort((a, b) => a.student_name.localeCompare(b.student_name))
 
+      const blindedRows = submissionRows.map((row) => {
+        const token = secureStore.tokenize(row.student_id, row.student_name)
+        return {
+          student: token,
+          score: row.score,
+          submitted_at: row.submitted_at,
+          graded_at: row.graded_at,
+          late: row.late,
+          missing: row.missing,
+          workflow_state: row.workflow_state,
+        }
+      })
+
       const gradedScores = submissions
         .map((s) => s.score)
         .filter((score): score is number => score !== null)
@@ -327,7 +384,7 @@ export function registerReportingTools(
           ? Math.round((gradedScores.reduce((a, b) => a + b, 0) / gradedScores.length) * 10) / 10
           : null
 
-      return toJson({
+      return blindedResponse({
         assignment: {
           id: assignment.id,
           name: assignment.name,
@@ -335,7 +392,7 @@ export function registerReportingTools(
           due_at: assignment.due_at,
           html_url: assignment.html_url,
         },
-        submissions: submissionRows,
+        submissions: blindedRows,
         summary: {
           total_students: submissions.length,
           submitted: submissions.filter((s) => s.workflow_state !== 'unsubmitted').length,
@@ -346,7 +403,7 @@ export function registerReportingTools(
           ).length,
           mean_score,
         },
-      })
+      }, secureStore)
     }
   )
 
@@ -357,8 +414,8 @@ export function registerReportingTools(
     {
       description: 'Deep report on a single student — all assignments with scores, missing/late flags, and current grade.',
       inputSchema: z.object({
-        student_id: z.number().int().positive()
-          .describe('Canvas user ID of the student'),
+        student_token: z.string()
+          .describe('Session token from get_class_grade_summary or similar (e.g. "[STUDENT_001]")'),
         course_id: z.number().int().positive().optional()
           .describe('Canvas course ID. Defaults to active course.'),
       }),
@@ -372,8 +429,14 @@ export function registerReportingTools(
         return toolError((err as Error).message)
       }
 
+      const resolved = secureStore.resolve(args.student_token)
+      if (!resolved) {
+        return toolError(`Unknown student token: ${args.student_token}`)
+      }
+      const { canvasId } = resolved
+
       const [submissionsResult, enrollments] = await Promise.all([
-        fetchStudentSubmissions(client, courseId, args.student_id)
+        fetchStudentSubmissions(client, courseId, canvasId)
           .then((subs) => ({ ok: true as const, subs }))
           .catch((err: unknown) => {
             if (err instanceof CanvasApiError && (err.status === 403 || err.status === 404)) {
@@ -384,10 +447,10 @@ export function registerReportingTools(
         fetchStudentEnrollments(client, courseId),
       ])
 
-      const enrollment = enrollments.find((e) => e.user_id === args.student_id)
+      const enrollment = enrollments.find((e) => e.user_id === canvasId)
       if (!submissionsResult.ok || !enrollment) {
         return toolError(
-          `Student ${args.student_id} is not enrolled in course ${courseId}.`
+          `Student ${args.student_token} is not enrolled in course ${courseId}.`
         )
       }
 
@@ -420,11 +483,8 @@ export function registerReportingTools(
       ).length
       const total_graded = submissions.filter((s) => s.score !== null).length
 
-      return toJson({
-        student: {
-          id: enrollment.user_id,
-          name: enrollment.user.name,
-        },
+      return blindedResponse({
+        student_token: args.student_token,
         current_score: enrollment.grades.current_score,
         final_score: enrollment.grades.final_score,
         assignments,
@@ -435,7 +495,7 @@ export function registerReportingTools(
           total_ungraded,
           total_graded,
         },
-      })
+      }, secureStore)
     }
   )
 
@@ -476,7 +536,7 @@ export function registerReportingTools(
         })
       }
 
-      // Group by student
+      // Group by student (using real data for sort, tokenize after)
       const byStudent = new Map<
         number,
         { id: number; name: string; sortable_name: string; assignments: typeof missing }
@@ -499,6 +559,7 @@ export function registerReportingTools(
         .map((s) => ({
           id: s.id,
           name: s.name,
+          sortable_name: s.sortable_name,
           missing_assignments: s.assignments
             .sort((a, b) => {
               if (a.assignment?.due_at == null && b.assignment?.due_at == null) return 0
@@ -519,14 +580,24 @@ export function registerReportingTools(
         }))
         .sort((a, b) => {
           if (b.missing_count !== a.missing_count) return b.missing_count - a.missing_count
-          return a.name.localeCompare(b.name)
+          return a.sortable_name.localeCompare(b.sortable_name)
         })
 
-      return toJson({
+      // Tokenize after sorting
+      const blindedStudents = students.map((s) => {
+        const token = secureStore.tokenize(s.id, s.name)
+        return {
+          student: token,
+          missing_assignments: s.missing_assignments,
+          missing_count: s.missing_count,
+        }
+      })
+
+      return blindedResponse({
         as_of: new Date().toISOString(),
         total_missing_submissions: missing.length,
-        students,
-      })
+        students: blindedStudents,
+      }, secureStore)
     }
   )
 
@@ -575,6 +646,7 @@ export function registerReportingTools(
         .map((s) => ({
           id: s.id,
           name: s.name,
+          sortable_name: s.sortable_name,
           late_assignments: s.submissions
             .sort((a, b) => {
               if (a.submitted_at == null && b.submitted_at == null) return 0
@@ -597,14 +669,78 @@ export function registerReportingTools(
         }))
         .sort((a, b) => {
           if (b.late_count !== a.late_count) return b.late_count - a.late_count
-          return a.name.localeCompare(b.name)
+          return a.sortable_name.localeCompare(b.sortable_name)
         })
 
-      return toJson({
+      // Tokenize after sorting
+      const blindedStudents = students.map((s) => {
+        const token = secureStore.tokenize(s.id, s.name)
+        return {
+          student: token,
+          late_assignments: s.late_assignments,
+          late_count: s.late_count,
+        }
+      })
+
+      return blindedResponse({
         as_of: new Date().toISOString(),
         total_late_submissions: lateSubmissions.length,
-        students,
-      })
+        students: blindedStudents,
+      }, secureStore)
+    }
+  )
+
+  // ── resolve_student ─────────────────────────────────────────────────────────
+
+  server.registerTool(
+    'resolve_student',
+    {
+      description: 'Reveal the real name and Canvas ID for a student token. Result is visible to the user only — not sent to the assistant.',
+      inputSchema: z.object({
+        student_token: z.string()
+          .describe('Session token such as "[STUDENT_001]"'),
+      }),
+    },
+    async (args) => {
+      const resolved = secureStore.resolve(args.student_token)
+      if (!resolved) {
+        return toolError(`Unknown student token: ${args.student_token}`)
+      }
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify({
+              student_token: args.student_token,
+              name: resolved.name,
+              canvas_id: resolved.canvasId,
+            }, null, 2),
+            annotations: { audience: ['user' as const] },
+          },
+        ],
+      }
+    }
+  )
+
+  // ── list_blinded_students ───────────────────────────────────────────────────
+
+  server.registerTool(
+    'list_blinded_students',
+    {
+      description: 'List all student session tokens encountered this session. Use to remind the assistant which tokens are available.',
+      inputSchema: z.object({}),
+    },
+    async () => {
+      const tokens = secureStore.listTokens().map((t) => ({ token: t }))
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify(tokens, null, 2),
+            annotations: { audience: ['assistant' as const] },
+          },
+        ],
+      }
     }
   )
 }
