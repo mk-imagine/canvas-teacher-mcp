@@ -23,7 +23,11 @@ import {
   updateModuleItem,
   deleteModuleItem,
 } from '../canvas/modules.js'
-import { createPage, deletePage, getPage } from '../canvas/pages.js'
+import { createPage, updatePage, listPages, deletePage, getPage } from '../canvas/pages.js'
+import { createDiscussionTopic, deleteDiscussionTopic } from '../canvas/discussions.js'
+import { uploadFile, deleteFile } from '../canvas/files.js'
+import { createRubric, createRubricAssociation } from '../canvas/rubrics.js'
+import { updateCourse } from '../canvas/courses.js'
 
 function resolveCourseId(config: CanvasTeacherConfig, override?: number): number {
   const id = override ?? config.program.activeCourseId
@@ -601,6 +605,83 @@ export function registerContentTools(
     }
   )
 
+  // ── update_page ──────────────────────────────────────────────────────────────
+
+  server.registerTool(
+    'update_page',
+    {
+      description: 'Update an existing wiki page\'s title, body, or published state.',
+      inputSchema: z.object({
+        page_url: z.string()
+          .describe('Page URL slug (e.g. "week-2-overview"). Returned by create_page as the "url" field.'),
+        title: z.string().optional()
+          .describe('New page title.'),
+        body: z.string().optional()
+          .describe('HTML body content.'),
+        published: z.boolean().optional()
+          .describe('Published state.'),
+        course_id: z.number().int().positive().optional()
+          .describe('Canvas course ID. Defaults to active course.'),
+      }),
+    },
+    async (args) => {
+      const config = configManager.read()
+      let courseId: number
+      try {
+        courseId = resolveCourseId(config, args.course_id)
+      } catch (err) {
+        return toolError((err as Error).message)
+      }
+
+      const { page_url, course_id: _cid, ...fields } = args
+      try {
+        await getPage(client, courseId, page_url)
+      } catch {
+        return toolError(`Page not found: "${page_url}". Use list_pages to find the correct URL slug.`)
+      }
+      const page = await updatePage(client, courseId, page_url, fields)
+
+      return toJson({
+        page_id: page.page_id,
+        url: page.url,
+        title: page.title,
+        published: page.published,
+        front_page: page.front_page,
+      })
+    }
+  )
+
+  // ── list_pages ────────────────────────────────────────────────────────────────
+
+  server.registerTool(
+    'list_pages',
+    {
+      description: 'List all wiki pages in a course with their URL slugs and published state.',
+      inputSchema: z.object({
+        course_id: z.number().int().positive().optional()
+          .describe('Canvas course ID. Defaults to active course.'),
+      }),
+    },
+    async (args) => {
+      const config = configManager.read()
+      let courseId: number
+      try {
+        courseId = resolveCourseId(config, args.course_id)
+      } catch (err) {
+        return toolError((err as Error).message)
+      }
+
+      const pages = await listPages(client, courseId)
+      return toJson(pages.map(p => ({
+        page_id: p.page_id,
+        url: p.url,
+        title: p.title,
+        published: p.published,
+        front_page: p.front_page,
+      })))
+    }
+  )
+
   // ── delete_page ───────────────────────────────────────────────────────────────
 
   server.registerTool(
@@ -662,6 +743,362 @@ export function registerContentTools(
 
       await deleteModuleItem(client, courseId, args.module_id, args.item_id)
       return toJson({ deleted: true, module_id: args.module_id, item_id: args.item_id })
+    }
+  )
+
+  // ── delete_discussion ──────────────────────────────────────────────────────
+
+  server.registerTool(
+    'delete_discussion',
+    {
+      description: 'Permanently delete a discussion topic.',
+      inputSchema: z.object({
+        topic_id: z.number().int().positive()
+          .describe('Canvas discussion topic ID'),
+        course_id: z.number().int().positive().optional()
+          .describe('Canvas course ID. Defaults to active course.'),
+      }),
+    },
+    async (args) => {
+      const config = configManager.read()
+      let courseId: number
+      try {
+        courseId = resolveCourseId(config, args.course_id)
+      } catch (err) {
+        return toolError((err as Error).message)
+      }
+
+      await deleteDiscussionTopic(client, courseId, args.topic_id)
+      return toJson({ deleted: true, topic_id: args.topic_id })
+    }
+  )
+
+  // ── delete_announcement ────────────────────────────────────────────────────
+
+  server.registerTool(
+    'delete_announcement',
+    {
+      description: 'Permanently delete an announcement. Announcements are discussion topics internally.',
+      inputSchema: z.object({
+        topic_id: z.number().int().positive()
+          .describe('Canvas announcement (discussion topic) ID'),
+        course_id: z.number().int().positive().optional()
+          .describe('Canvas course ID. Defaults to active course.'),
+      }),
+    },
+    async (args) => {
+      const config = configManager.read()
+      let courseId: number
+      try {
+        courseId = resolveCourseId(config, args.course_id)
+      } catch (err) {
+        return toolError((err as Error).message)
+      }
+
+      await deleteDiscussionTopic(client, courseId, args.topic_id)
+      return toJson({ deleted: true, topic_id: args.topic_id })
+    }
+  )
+
+  // ── delete_file ────────────────────────────────────────────────────────────
+
+  server.registerTool(
+    'delete_file',
+    {
+      description: 'Permanently delete a file. Warning: this is irreversible — Canvas has no trash bin for files.',
+      inputSchema: z.object({
+        file_id: z.number().int().positive()
+          .describe('Canvas file ID'),
+      }),
+    },
+    async (args) => {
+      await deleteFile(client, args.file_id)
+      return toJson({ deleted: true, file_id: args.file_id })
+    }
+  )
+
+  // ── clear_syllabus ─────────────────────────────────────────────────────────
+
+  server.registerTool(
+    'clear_syllabus',
+    {
+      description: 'Clear the course syllabus body to an empty string.',
+      inputSchema: z.object({
+        course_id: z.number().int().positive().optional()
+          .describe('Canvas course ID. Defaults to active course.'),
+      }),
+    },
+    async (args) => {
+      const config = configManager.read()
+      let courseId: number
+      try {
+        courseId = resolveCourseId(config, args.course_id)
+      } catch (err) {
+        return toolError((err as Error).message)
+      }
+
+      await updateCourse(client, courseId, { syllabus_body: '' })
+      return toJson({ cleared: true, course_id: courseId })
+    }
+  )
+
+  // ── create_discussion ─────────────────────────────────────────────────────
+
+  server.registerTool(
+    'create_discussion',
+    {
+      description: 'Create a new discussion topic in a course.',
+      inputSchema: z.object({
+        title: z.string()
+          .describe('Discussion title'),
+        message: z.string().optional()
+          .describe('HTML body content for the discussion.'),
+        published: z.boolean().optional()
+          .describe('Whether to publish immediately. Default false.'),
+        course_id: z.number().int().positive().optional()
+          .describe('Canvas course ID. Defaults to active course.'),
+      }),
+    },
+    async (args) => {
+      const config = configManager.read()
+      let courseId: number
+      try {
+        courseId = resolveCourseId(config, args.course_id)
+      } catch (err) {
+        return toolError((err as Error).message)
+      }
+
+      const topic = await createDiscussionTopic(client, courseId, {
+        title: args.title,
+        message: args.message,
+        published: args.published ?? false,
+      })
+
+      return toJson({
+        id: topic.id,
+        title: topic.title,
+        message: topic.message,
+        is_announcement: topic.is_announcement,
+        published: topic.published,
+      })
+    }
+  )
+
+  // ── create_announcement ───────────────────────────────────────────────────
+
+  server.registerTool(
+    'create_announcement',
+    {
+      description: 'Create a new announcement in a course. Announcements are always published.',
+      inputSchema: z.object({
+        title: z.string()
+          .describe('Announcement title'),
+        message: z.string().optional()
+          .describe('HTML body content for the announcement.'),
+        course_id: z.number().int().positive().optional()
+          .describe('Canvas course ID. Defaults to active course.'),
+      }),
+    },
+    async (args) => {
+      const config = configManager.read()
+      let courseId: number
+      try {
+        courseId = resolveCourseId(config, args.course_id)
+      } catch (err) {
+        return toolError((err as Error).message)
+      }
+
+      const topic = await createDiscussionTopic(client, courseId, {
+        title: args.title,
+        message: args.message,
+        is_announcement: true,
+        published: true,
+      })
+
+      return toJson({
+        id: topic.id,
+        title: topic.title,
+        message: topic.message,
+        is_announcement: topic.is_announcement,
+        published: topic.published,
+      })
+    }
+  )
+
+  // ── upload_file ───────────────────────────────────────────────────────────
+
+  server.registerTool(
+    'upload_file',
+    {
+      description: 'Upload a file to a course. Uses the 3-step Canvas file upload process.',
+      inputSchema: z.object({
+        file_path: z.string()
+          .describe('Absolute path to the local file to upload.'),
+        name: z.string().optional()
+          .describe('Display name for the file in Canvas. Defaults to the local filename.'),
+        folder_path: z.string().optional()
+          .describe('Canvas folder path (e.g. "course files/week1"). Defaults to root.'),
+        course_id: z.number().int().positive().optional()
+          .describe('Canvas course ID. Defaults to active course.'),
+      }),
+    },
+    async (args) => {
+      const config = configManager.read()
+      let courseId: number
+      try {
+        courseId = resolveCourseId(config, args.course_id)
+      } catch (err) {
+        return toolError((err as Error).message)
+      }
+
+      try {
+        const { statSync } = await import('node:fs')
+        statSync(args.file_path)
+      } catch {
+        return toolError(`File not found: ${args.file_path}`)
+      }
+
+      const file = await uploadFile(client, courseId, {
+        file_path: args.file_path,
+        name: args.name,
+        folder_path: args.folder_path,
+      })
+
+      return toJson({
+        id: file.id,
+        display_name: file.display_name,
+        filename: file.filename,
+        size: file.size,
+        content_type: file.content_type,
+        folder_id: file.folder_id,
+      })
+    }
+  )
+
+  // ── create_rubric ─────────────────────────────────────────────────────────
+
+  server.registerTool(
+    'create_rubric',
+    {
+      description: 'Create a rubric and immediately associate it with an assignment for grading. Rubrics must be linked to an assignment — Canvas does not support standalone rubrics.',
+      inputSchema: z.object({
+        title: z.string()
+          .describe('Rubric title'),
+        assignment_id: z.number().int().positive()
+          .describe('Canvas assignment ID to associate the rubric with.'),
+        criteria: z.array(z.object({
+          description: z.string()
+            .describe('Criterion description'),
+          points: z.number()
+            .describe('Maximum points for this criterion'),
+          ratings: z.array(z.object({
+            description: z.string()
+              .describe('Rating level description'),
+            points: z.number()
+              .describe('Points for this rating level'),
+          }))
+            .describe('Rating levels for this criterion'),
+        }))
+          .describe('Rubric criteria with nested ratings'),
+        use_for_grading: z.boolean().optional()
+          .describe('Use the rubric for grading. Defaults to true.'),
+        course_id: z.number().int().positive().optional()
+          .describe('Canvas course ID. Defaults to active course.'),
+      }),
+    },
+    async (args) => {
+      const config = configManager.read()
+      let courseId: number
+      try {
+        courseId = resolveCourseId(config, args.course_id)
+      } catch (err) {
+        return toolError((err as Error).message)
+      }
+
+      const { rubric, rubric_association } = await createRubric(client, courseId, {
+        title: args.title,
+        assignment_id: args.assignment_id,
+        criteria: args.criteria,
+        use_for_grading: args.use_for_grading,
+      })
+
+      return toJson({
+        id: rubric.id,
+        title: rubric.title,
+        points_possible: rubric.points_possible,
+        association_id: rubric_association.id,
+        assignment_id: rubric_association.association_id,
+        use_for_grading: rubric_association.use_for_grading,
+      })
+    }
+  )
+
+  // ── update_syllabus ───────────────────────────────────────────────────────
+
+  server.registerTool(
+    'update_syllabus',
+    {
+      description: 'Set the course syllabus body to the provided HTML.',
+      inputSchema: z.object({
+        body: z.string()
+          .describe('HTML content for the syllabus.'),
+        course_id: z.number().int().positive().optional()
+          .describe('Canvas course ID. Defaults to active course.'),
+      }),
+    },
+    async (args) => {
+      const config = configManager.read()
+      let courseId: number
+      try {
+        courseId = resolveCourseId(config, args.course_id)
+      } catch (err) {
+        return toolError((err as Error).message)
+      }
+
+      await updateCourse(client, courseId, { syllabus_body: args.body })
+      return toJson({ updated: true, course_id: courseId })
+    }
+  )
+
+  // ── associate_rubric ──────────────────────────────────────────────────────
+
+  server.registerTool(
+    'associate_rubric',
+    {
+      description: 'Associate an existing rubric with an assignment for grading. If assignment_id is omitted, associates the rubric at the course level.',
+      inputSchema: z.object({
+        rubric_id: z.number().int().positive()
+          .describe('Canvas rubric ID'),
+        assignment_id: z.number().int().positive().optional()
+          .describe('Canvas assignment ID. If omitted, associates at the course level.'),
+        use_for_grading: z.boolean().optional()
+          .describe('Use the rubric for grading. Defaults to true when assignment_id is provided.'),
+        course_id: z.number().int().positive().optional()
+          .describe('Canvas course ID. Defaults to active course.'),
+      }),
+    },
+    async (args) => {
+      const config = configManager.read()
+      let courseId: number
+      try {
+        courseId = resolveCourseId(config, args.course_id)
+      } catch (err) {
+        return toolError((err as Error).message)
+      }
+
+      const association = await createRubricAssociation(client, courseId, {
+        rubric_id: args.rubric_id,
+        assignment_id: args.assignment_id,
+        use_for_grading: args.use_for_grading,
+      })
+
+      return toJson({
+        id: association.id,
+        rubric_id: association.rubric_id,
+        association_id: association.association_id,
+        association_type: association.association_type,
+        use_for_grading: association.use_for_grading,
+      })
     }
   )
 }

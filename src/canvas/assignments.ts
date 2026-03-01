@@ -10,6 +10,7 @@ export interface CanvasAssignmentFull {
   submission_types: string[]
   assignment_group_id: number | null
   published: boolean
+  rubric_settings?: { id: number; points_possible: number }
 }
 
 export interface CreateAssignmentParams {
@@ -75,10 +76,41 @@ export async function getAssignment(
   )
 }
 
+export interface CanvasAssignmentGroup {
+  id: number
+  name: string
+  position: number
+  group_weight: number
+}
+
+export async function listAssignmentGroups(
+  client: CanvasClient,
+  courseId: number
+): Promise<CanvasAssignmentGroup[]> {
+  return client.get<CanvasAssignmentGroup>(
+    `/api/v1/courses/${courseId}/assignment_groups`,
+    { per_page: '100' }
+  )
+}
+
+export async function deleteAssignmentGroup(
+  client: CanvasClient,
+  courseId: number,
+  groupId: number
+): Promise<void> {
+  return client.delete(`/api/v1/courses/${courseId}/assignment_groups/${groupId}`)
+}
+
 export async function deleteAssignment(
   client: CanvasClient,
   courseId: number,
   assignmentId: number
 ): Promise<void> {
+  // Pre-delete any associated rubric — Canvas returns 500 when deleting
+  // orphaned rubrics whose assignment was already deleted.
+  const assignment = await getAssignment(client, courseId, assignmentId)
+  if (assignment.rubric_settings?.id) {
+    await client.delete(`/api/v1/courses/${courseId}/rubrics/${assignment.rubric_settings.id}`)
+  }
   return client.delete(`/api/v1/courses/${courseId}/assignments/${assignmentId}`)
 }

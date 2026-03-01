@@ -40,6 +40,7 @@ interface CreatedItem {
   type: string
   title: string
   id?: number
+  url?: string
   module_item_id?: number
 }
 
@@ -83,7 +84,7 @@ async function executeRenderables(
           title: item.title,
           page_url: page.url,
         })
-        items_created.push({ type: 'Page', title: item.title, id: page.page_id, module_item_id: mi.id })
+        items_created.push({ type: 'Page', title: item.title, id: page.page_id, url: page.url, module_item_id: mi.id })
 
       } else if (item.kind === 'assignment') {
         const assignment = await createAssignment(client, courseId, {

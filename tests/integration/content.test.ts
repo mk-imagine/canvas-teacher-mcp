@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync, unlinkSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -74,13 +74,18 @@ function parseResult(result: Awaited<ReturnType<Client['callTool']>>) {
   return JSON.parse(text)
 }
 
-// Assignments, quizzes, and pages created during tests are tracked for afterAll cleanup
+// Assignments, quizzes, pages, discussions, files, and rubrics created during tests are tracked for afterAll cleanup
 const createdAssignmentIds: number[] = []
 const createdQuizIds: number[] = []
 const createdPageUrls: string[] = []
+const createdDiscussionIds: number[] = []
+const createdFileIds: number[] = []
+const createdRubricIds: number[] = []
 
 afterAll(async () => {
-  if (createdAssignmentIds.length === 0 && createdQuizIds.length === 0 && createdPageUrls.length === 0) return
+  const hasCleanup = createdAssignmentIds.length + createdQuizIds.length + createdPageUrls.length +
+    createdDiscussionIds.length + createdFileIds.length + createdRubricIds.length > 0
+  if (!hasCleanup) return
   const configPath = makeTmpConfigPath()
   makeConfig(configPath)
   const { mcpClient } = await makeIntegrationClient(configPath)
@@ -93,7 +98,25 @@ afterAll(async () => {
   for (const url of createdPageUrls) {
     await mcpClient.callTool({ name: 'delete_page', arguments: { page_url: url } })
   }
-  console.log(`  Cleanup: deleted ${createdAssignmentIds.length} assignments, ${createdQuizIds.length} quizzes, ${createdPageUrls.length} pages`)
+  for (const id of createdDiscussionIds) {
+    await mcpClient.callTool({ name: 'delete_discussion', arguments: { topic_id: id } })
+  }
+  for (const id of createdFileIds) {
+    await mcpClient.callTool({ name: 'delete_file', arguments: { file_id: id } })
+  }
+  // Rubrics need direct Canvas API calls since delete_rubric isn't exposed as a tool without course_id
+  if (createdRubricIds.length > 0) {
+    const { deleteRubric } = await import('../../src/canvas/rubrics.js')
+    const canvasClient = new CanvasClient({ instanceUrl, apiToken })
+    for (const id of createdRubricIds) {
+      try {
+        await deleteRubric(canvasClient, testCourseId, id)
+      } catch {
+        console.warn(`  Warning: failed to delete rubric id=${id} (may already be deleted)`)
+      }
+    }
+  }
+  console.log(`  Cleanup: deleted ${createdAssignmentIds.length} assignments, ${createdQuizIds.length} quizzes, ${createdPageUrls.length} pages, ${createdDiscussionIds.length} discussions, ${createdFileIds.length} files, ${createdRubricIds.length} rubrics`)
 })
 
 // ─── create_assignment ────────────────────────────────────────────────────────
@@ -526,5 +549,313 @@ describe('Integration: delete_page', () => {
     await updatePage(canvasClient, testCourseId, page.url, { front_page: false })
     await deletePage(canvasClient, testCourseId, page.url)
     console.log(`  Cleaned up test front page`)
+  })
+})
+
+// ─── create_discussion ──────────────────────────────────────────────────────
+
+describe('Integration: create_discussion', () => {
+  it('creates a discussion topic and verifies fields', async () => {
+    const configPath = makeTmpConfigPath()
+    makeConfig(configPath)
+    const { mcpClient } = await makeIntegrationClient(configPath)
+
+    const data = parseResult(
+      await mcpClient.callTool({
+        name: 'create_discussion',
+        arguments: {
+          title: '[MCP TEST] Integration Discussion',
+          message: '<p>Discuss this topic.</p>',
+          published: false,
+        },
+      })
+    )
+
+    expect(data.id).toBeTypeOf('number')
+    expect(data.title).toBe('[MCP TEST] Integration Discussion')
+    expect(data.is_announcement).toBe(false)
+
+    createdDiscussionIds.push(data.id)
+    console.log(`  Created discussion id=${data.id}: "${data.title}"`)
+  })
+})
+
+// ─── create_announcement ────────────────────────────────────────────────────
+
+describe('Integration: create_announcement', () => {
+  it('creates an announcement with is_announcement=true', async () => {
+    const configPath = makeTmpConfigPath()
+    makeConfig(configPath)
+    const { mcpClient } = await makeIntegrationClient(configPath)
+
+    const data = parseResult(
+      await mcpClient.callTool({
+        name: 'create_announcement',
+        arguments: {
+          title: '[MCP TEST] Integration Announcement',
+          message: '<p>Important update.</p>',
+        },
+      })
+    )
+
+    expect(data.id).toBeTypeOf('number')
+    expect(data.title).toBe('[MCP TEST] Integration Announcement')
+    expect(data.is_announcement).toBe(true)
+    expect(data.published).toBe(true)
+
+    createdDiscussionIds.push(data.id)
+    console.log(`  Created announcement id=${data.id}: "${data.title}"`)
+  })
+})
+
+// ─── upload_file ────────────────────────────────────────────────────────────
+
+describe('Integration: upload_file', () => {
+  let tmpFilePath: string
+
+  it('uploads a text file and verifies file info', async () => {
+    const configPath = makeTmpConfigPath()
+    makeConfig(configPath)
+    const { mcpClient } = await makeIntegrationClient(configPath)
+
+    const suffix = randomBytes(4).toString('hex')
+    tmpFilePath = join(tmpdir(), `mcp-test-upload-${suffix}.txt`)
+    writeFileSync(tmpFilePath, 'Integration test file content', 'utf-8')
+
+    const data = parseResult(
+      await mcpClient.callTool({
+        name: 'upload_file',
+        arguments: { file_path: tmpFilePath, name: `mcp-test-${suffix}.txt` },
+      })
+    )
+
+    expect(data.id).toBeTypeOf('number')
+    expect(data.size).toBeGreaterThan(0)
+
+    createdFileIds.push(data.id)
+    console.log(`  Uploaded file id=${data.id}: "${data.display_name}"`)
+
+    try { unlinkSync(tmpFilePath) } catch { /* ignore */ }
+  })
+})
+
+// ─── create_rubric ──────────────────────────────────────────────────────────
+
+describe('Integration: create_rubric', () => {
+  it('creates an assignment then a rubric associated with it and verifies fields', async () => {
+    const configPath = makeTmpConfigPath()
+    makeConfig(configPath)
+    const { mcpClient } = await makeIntegrationClient(configPath)
+
+    // Rubrics must be associated with an assignment at creation time
+    const assignment = parseResult(
+      await mcpClient.callTool({
+        name: 'create_assignment',
+        arguments: { name: '[MCP TEST] Rubric Host Assignment', points_possible: 10, published: false },
+      })
+    )
+    createdAssignmentIds.push(assignment.id)
+    console.log(`  Created host assignment id=${assignment.id}`)
+
+    const data = parseResult(
+      await mcpClient.callTool({
+        name: 'create_rubric',
+        arguments: {
+          title: '[MCP TEST] Integration Rubric',
+          assignment_id: assignment.id,
+          criteria: [
+            {
+              description: 'Completeness',
+              points: 5,
+              ratings: [
+                { description: 'Full', points: 5 },
+                { description: 'Partial', points: 3 },
+                { description: 'Missing', points: 0 },
+              ],
+            },
+          ],
+        },
+      })
+    )
+
+    expect(data.id).toBeTypeOf('number')
+    expect(data.title).toContain('[MCP TEST] Integration Rubric')
+    expect(data.association_id).toBeTypeOf('number')
+    expect(data.assignment_id).toBe(assignment.id)
+    expect(data.use_for_grading).toBe(true)
+
+    // Rubric is linked to the assignment; deleting the assignment (in afterAll) cleans up the rubric.
+    console.log(`  Created rubric id=${data.id}: "${data.title}" (associated with assignment ${assignment.id})`)
+  })
+})
+
+// ─── update_syllabus ────────────────────────────────────────────────────────
+
+describe('Integration: update_syllabus', () => {
+  it('sets syllabus body and then clears it', async () => {
+    const configPath = makeTmpConfigPath()
+    makeConfig(configPath)
+    const { mcpClient } = await makeIntegrationClient(configPath)
+
+    const data = parseResult(
+      await mcpClient.callTool({
+        name: 'update_syllabus',
+        arguments: { body: '<h1>[MCP TEST] Syllabus</h1>' },
+      })
+    )
+
+    expect(data.updated).toBe(true)
+    expect(data.course_id).toBe(testCourseId)
+    console.log(`  Set syllabus body`)
+
+    // Clear it back
+    const cleared = parseResult(
+      await mcpClient.callTool({
+        name: 'clear_syllabus',
+        arguments: {},
+      })
+    )
+    expect(cleared.cleared).toBe(true)
+    console.log(`  Cleared syllabus body`)
+  })
+})
+
+// ─── delete_discussion ──────────────────────────────────────────────────────
+
+describe('Integration: delete_discussion', () => {
+  it('creates a discussion then deletes it', async () => {
+    const configPath = makeTmpConfigPath()
+    makeConfig(configPath)
+    const { mcpClient } = await makeIntegrationClient(configPath)
+
+    const created = parseResult(
+      await mcpClient.callTool({
+        name: 'create_discussion',
+        arguments: { title: '[MCP TEST] To Be Deleted Discussion' },
+      })
+    )
+    console.log(`  Created discussion id=${created.id}`)
+
+    const data = parseResult(
+      await mcpClient.callTool({
+        name: 'delete_discussion',
+        arguments: { topic_id: created.id },
+      })
+    )
+
+    expect(data.deleted).toBe(true)
+    expect(data.topic_id).toBe(created.id)
+    console.log(`  Deleted discussion id=${created.id}`)
+  })
+})
+
+// ─── delete_file ────────────────────────────────────────────────────────────
+
+describe('Integration: delete_file', () => {
+  it('uploads a file then deletes it', async () => {
+    const configPath = makeTmpConfigPath()
+    makeConfig(configPath)
+    const { mcpClient } = await makeIntegrationClient(configPath)
+
+    const suffix = randomBytes(4).toString('hex')
+    const tmpPath = join(tmpdir(), `mcp-test-delete-${suffix}.txt`)
+    writeFileSync(tmpPath, 'File to be deleted', 'utf-8')
+
+    const created = parseResult(
+      await mcpClient.callTool({
+        name: 'upload_file',
+        arguments: { file_path: tmpPath },
+      })
+    )
+    console.log(`  Uploaded file id=${created.id}`)
+    try { unlinkSync(tmpPath) } catch { /* ignore */ }
+
+    const data = parseResult(
+      await mcpClient.callTool({
+        name: 'delete_file',
+        arguments: { file_id: created.id },
+      })
+    )
+
+    expect(data.deleted).toBe(true)
+    expect(data.file_id).toBe(created.id)
+    console.log(`  Deleted file id=${created.id}`)
+  })
+})
+
+// ─── associate_rubric ────────────────────────────────────────────────────────
+
+describe('Integration: associate_rubric', () => {
+  it('creates a rubric (with assignment1), then re-associates it with assignment2', async () => {
+    const configPath = makeTmpConfigPath()
+    makeConfig(configPath)
+    const { mcpClient } = await makeIntegrationClient(configPath)
+    const canvasClient = new CanvasClient({ instanceUrl, apiToken })
+
+    // Create the initial host assignment (rubric requires an assignment at creation)
+    const assignment1 = parseResult(
+      await mcpClient.callTool({
+        name: 'create_assignment',
+        arguments: { name: '[MCP TEST] Rubric Initial Host', points_possible: 10 },
+      })
+    )
+    console.log(`  Created assignment1 id=${assignment1.id}`)
+    expect(assignment1.id).toBeGreaterThan(0)
+
+    // Create the rubric linked to assignment1
+    const rubric = parseResult(
+      await mcpClient.callTool({
+        name: 'create_rubric',
+        arguments: {
+          title: '[MCP TEST] Associate Rubric',
+          assignment_id: assignment1.id,
+          criteria: [
+            {
+              description: 'Code Quality',
+              points: 10,
+              ratings: [
+                { description: 'Excellent', points: 10 },
+                { description: 'Needs Improvement', points: 5 },
+                { description: 'Incomplete', points: 0 },
+              ],
+            },
+          ],
+        },
+      })
+    )
+    console.log(`  Created rubric id=${rubric.id} title="${rubric.title}"`)
+    expect(rubric.id).toBeGreaterThan(0)
+
+    // Create a second assignment to test re-association
+    const assignment2 = parseResult(
+      await mcpClient.callTool({
+        name: 'create_assignment',
+        arguments: { name: '[MCP TEST] Rubric Re-association Target', points_possible: 10 },
+      })
+    )
+    console.log(`  Created assignment2 id=${assignment2.id}`)
+    expect(assignment2.id).toBeGreaterThan(0)
+
+    try {
+      // Associate the rubric with assignment2 (re-association)
+      const association = parseResult(
+        await mcpClient.callTool({
+          name: 'associate_rubric',
+          arguments: { rubric_id: rubric.id, assignment_id: assignment2.id },
+        })
+      )
+      console.log(`  Created association id=${association.id} type=${association.association_type}`)
+      expect(association.id).toBeGreaterThan(0)
+      expect(association.rubric_id).toBe(rubric.id)
+      expect(association.association_id).toBe(assignment2.id)
+      expect(association.association_type).toBe('Assignment')
+      expect(association.use_for_grading).toBe(true)
+    } finally {
+      // Clean up: delete rubric first (Canvas associates it to assignments), then assignments
+      await canvasClient.delete(`/api/v1/courses/${testCourseId}/rubrics/${rubric.id}`).catch(() => {})
+      await canvasClient.delete(`/api/v1/courses/${testCourseId}/assignments/${assignment1.id}`).catch(() => {})
+      await canvasClient.delete(`/api/v1/courses/${testCourseId}/assignments/${assignment2.id}`).catch(() => {})
+      console.log(`  Cleanup: deleted rubric id=${rubric.id}, assignment1 id=${assignment1.id}, assignment2 id=${assignment2.id}`)
+    }
   })
 })

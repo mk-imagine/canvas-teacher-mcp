@@ -29,6 +29,14 @@ export class CanvasClient {
     }
   }
 
+  get instanceUrl(): string {
+    return this.baseUrl
+  }
+
+  get authHeaders(): Record<string, string> {
+    return { ...this.headers }
+  }
+
   private url(path: string, params?: Record<string, string>): string {
     const u = new URL(`${this.baseUrl}${path}`)
     if (params) {

@@ -79,9 +79,12 @@ canvas-teacher-mcp/
 │   ├── canvas/
 │   │   ├── client.ts         # Canvas API client (auth, pagination, retry)
 │   │   ├── modules.ts        # Module & module item API calls
-│   │   ├── assignments.ts    # Assignment API calls
+│   │   ├── assignments.ts    # Assignment & assignment-group API calls
 │   │   ├── quizzes.ts        # Classic Quiz API calls
 │   │   ├── pages.ts          # Page API calls (CRUD + front page handling)
+│   │   ├── discussions.ts    # Discussion topic & announcement API calls
+│   │   ├── files.ts          # File upload (3-step Canvas/S3 flow) & delete
+│   │   ├── rubrics.ts        # Rubric CRUD + association API calls
 │   │   ├── submissions.ts    # Submission & grade API calls
 │   │   └── courses.ts        # Course & enrollment API calls
 │   ├── tools/
@@ -698,6 +701,121 @@ All tools accept an optional `course_id` parameter. If omitted, the active cours
 
 ---
 
+#### `create_discussion`
+
+**Purpose:** Create a discussion topic in a course.
+
+**Inputs:**
+- `title` (string, required).
+- `message` (string, optional): HTML body of the discussion prompt.
+- `published` (boolean, optional): Default `false`.
+- `course_id` (number, optional).
+
+**Output:** `{ id, title, message, is_announcement, published, html_url }`
+
+**Canvas API Calls:**
+- `POST /api/v1/courses/:id/discussion_topics`
+
+---
+
+#### `create_announcement`
+
+**Purpose:** Create an announcement. Announcements are discussion topics with `is_announcement: true` — they appear in the Announcements section and are auto-published.
+
+**Inputs:**
+- `title` (string, required).
+- `message` (string, optional): HTML body of the announcement.
+- `course_id` (number, optional).
+
+**Output:** `{ id, title, message, is_announcement, published, html_url }`
+
+**Canvas API Calls:**
+- `POST /api/v1/courses/:id/discussion_topics` (with `is_announcement: true, published: true`)
+
+---
+
+#### `upload_file`
+
+**Purpose:** Upload a local file to the course Files section using Canvas's 3-step file upload protocol.
+
+**Inputs:**
+- `file_path` (string, required): Absolute path to the file on disk.
+- `name` (string, optional): Override the filename stored in Canvas. Defaults to the basename of `file_path`.
+- `folder_path` (string, optional): Destination folder path within course files (e.g., `"Week 3/Data Files"`). Defaults to the course root.
+- `course_id` (number, optional).
+
+**Output:** `{ id, display_name, size, content-type, url }`
+
+**Canvas API Calls (3-step file upload protocol):**
+1. `POST /api/v1/courses/:id/files` with `{ name, size, content_type, parent_folder_path }` → `{ upload_url, upload_params }`
+2. `POST <upload_url>` (external S3/CDN URL — no auth header) with multipart form containing `upload_params` fields + file binary
+3. If step 2 returns a redirect (301/303): `GET <Location>` with Canvas auth to confirm upload; if step 2 returns 200/201 with file JSON, use that directly.
+
+**Notes:**
+- Step 2 POSTs to an S3-signed URL, not the Canvas server — do not include the `Authorization` header.
+- MIME type is inferred from the file extension using a hardcoded map; falls back to `application/octet-stream` for unknown extensions.
+
+---
+
+#### `create_rubric`
+
+**Purpose:** Create a rubric and immediately associate it with an assignment for grading.
+
+> **Canvas limitation — rubrics require an assignment association:** Canvas does not support standalone rubrics. A rubric with no assignment association enters an inconsistent "zombie" state: it appears in the course rubric list but returns 404 on individual GET and 500 on DELETE. The only recovery is to create an assignment-level association first, then delete the rubric. To prevent zombie rubrics, `create_rubric` always requires an `assignment_id` and creates the rubric and its association in a single API call using Canvas's `rubric_association` params on the rubric creation endpoint.
+
+**Inputs:**
+- `title` (string, required): Rubric title.
+- `assignment_id` (number, required): Canvas assignment ID to associate the rubric with. The rubric will be used for grading this assignment.
+- `criteria` (array, required): Each criterion has `description` (string), `points` (number), and `ratings` (array of `{ description, points }`).
+- `use_for_grading` (boolean, optional): Use the rubric for grading. Defaults to `true`.
+- `course_id` (number, optional).
+
+**Output:** `{ id, title, points_possible, association_id, assignment_id, use_for_grading }`
+
+**Canvas API Calls:**
+- `POST /api/v1/courses/:id/rubrics` (with both `rubric` and `rubric_association` params in the same request body)
+
+**Notes:**
+- Canvas's rubric criteria API uses numeric string keys (`"0"`, `"1"`, ...) for both criteria and ratings, not arrays. This conversion is handled internally.
+- Canvas returns `{ rubric: {...}, rubric_association: {...} }` — both objects are extracted from the response.
+- Deleting the associated assignment also removes the rubric (Canvas cascades this). `delete_assignment` pre-deletes the rubric before deleting the assignment to avoid Canvas 500 errors from the reverse ordering.
+
+---
+
+#### `associate_rubric`
+
+**Purpose:** Associate an existing rubric with a different assignment. Useful when a rubric created for one assignment should also be used for grading another.
+
+**Inputs:**
+- `rubric_id` (number, required): Canvas rubric ID.
+- `assignment_id` (number, optional): Canvas assignment ID. If omitted, associates at the course level (used for rubric-bank purposes only — not for grading).
+- `use_for_grading` (boolean, optional): Defaults to `true` when `assignment_id` is provided.
+- `course_id` (number, optional).
+
+**Output:** `{ id, rubric_id, association_id, association_type, use_for_grading, purpose }`
+
+**Canvas API Calls:**
+- `POST /api/v1/courses/:id/rubric_associations`
+
+**Notes:** Canvas wraps the response in `{ rubric_association: {...} }` — the tool unwraps this before returning.
+
+---
+
+#### `update_syllabus`
+
+**Purpose:** Set or replace the course syllabus body with arbitrary HTML.
+
+**Inputs:**
+- `body` (string, required): HTML content for the syllabus.
+- `course_id` (number, optional).
+
+**Output:** `{ updated: true, course_id }`
+
+**Canvas API Calls:**
+- `PUT /api/v1/courses/:id` with `{ course: { syllabus_body: body } }`
+
+---
+
 #### `create_page`
 
 **Purpose:** Create a new wiki page in a course.
@@ -996,16 +1114,17 @@ See [Section 10](#10-safety--destructive-operations) for the full safety protoco
 **Canvas API Calls (sequential, each paginated):**
 1. `GET /api/v1/courses/:id` — fetch course name and validate `confirmation_text`
 2. `GET /api/v1/courses/:id/modules` → `DELETE .../modules/:id` for each
-3. `GET /api/v1/courses/:id/assignments` → `DELETE .../assignments/:id` for each
+3. `GET /api/v1/courses/:id/assignments` → `DELETE .../assignments/:id` for each (each assignment pre-deletes its associated rubric before deletion to avoid Canvas 500s)
 4. `GET /api/v1/courses/:id/quizzes` → `DELETE .../quizzes/:id` for each (note: quiz-backed assignments already deleted in step 3 — most will 404, handled gracefully)
-5. `GET /api/v1/courses/:id/discussion_topics` → `DELETE .../discussion_topics/:id` for each (note: graded discussions already deleted in step 3 — some will 404, handled gracefully)
+5a. `GET /api/v1/courses/:id/discussion_topics` → `DELETE .../discussion_topics/:id` for each (note: graded discussions already deleted in step 3 — some will 404, handled gracefully)
+5b. `GET /api/v1/courses/:id/discussion_topics?only_announcements=true` → `DELETE .../discussion_topics/:id` for each
 6. `GET /api/v1/courses/:id/pages` → for each page: if `front_page === true`, `PUT /pages/:url` with `{ front_page: false }` first, then `DELETE .../pages/:url`
 7. `GET /api/v1/courses/:id/files` → `DELETE /api/v1/files/:id` for each
-8. `GET /api/v1/courses/:id/rubrics` → `DELETE .../rubrics/:id` for each (orphans from deleted assignments)
+8. `GET /api/v1/courses/:id/rubrics` → for each rubric: attempt `DELETE .../rubrics/:id`; if that fails (zombie rubric — Canvas 500), create a temporary assignment, `POST .../rubric_associations` to associate the zombie, retry delete, then delete the temp assignment; if recovery also fails, track in `rubrics_failed`
 9. `GET /api/v1/courses/:id/assignment_groups` → `DELETE .../assignment_groups/:id` for each (all empty after step 3; Canvas keeps at least one — skip if last deletion errors)
 10. `PUT /api/v1/courses/:id` with `{ course: { syllabus_body: '' } }` — clear syllabus
 
-**Notes:** Deletion happens in the order listed. Module deletion removes module structure but not underlying content objects; steps 3–10 clean those up. Several content types overlap (quizzes ↔ assignments, graded discussions ↔ assignments), so later steps will encounter 404s from content already removed in earlier steps — all handled gracefully. See Section 10 for additional safety guards.
+**Notes:** Deletion happens in the order listed. Module deletion removes module structure but not underlying content objects; steps 3–10 clean those up. Several content types overlap (quizzes ↔ assignments, graded discussions ↔ assignments), so later steps will encounter 404s from content already removed in earlier steps — all handled gracefully. See Section 10 for additional safety guards. See Section 12 for the rubric zombie limitation.
 
 **What is preserved (not deleted):**
 - Enrollments and sections (the roster)
@@ -1047,13 +1166,19 @@ See [Section 10](#10-safety--destructive-operations) for the full safety protoco
 | PUT      | `/api/v1/courses/:id/pages/:url`                                      | `reset_course` (unset front page before delete) |
 | DELETE   | `/api/v1/courses/:id/pages/:url`                                      | `delete_page`, `reset_course` |
 | GET      | `/api/v1/courses/:id/discussion_topics`                               | `preview_course_reset`, `reset_course` |
-| GET      | `/api/v1/courses/:id/discussion_topics?only_announcements=true`       | `preview_course_reset` |
+| GET      | `/api/v1/courses/:id/discussion_topics?only_announcements=true`       | `preview_course_reset`, `reset_course` |
+| POST     | `/api/v1/courses/:id/discussion_topics`                               | `create_discussion`, `create_announcement` |
 | DELETE   | `/api/v1/courses/:id/discussion_topics/:id`                           | `delete_discussion`, `delete_announcement`, `reset_course` |
 | GET      | `/api/v1/courses/:id/files`                                           | `preview_course_reset`, `reset_course` |
+| POST     | `/api/v1/courses/:id/files`                                           | `upload_file` (step 1: initiate upload, get S3 URL) |
+| POST     | `<S3 signed upload_url>`                                              | `upload_file` (step 2: upload binary to S3/CDN — no Canvas auth) |
+| GET      | `<Location redirect from step 2>`                                     | `upload_file` (step 3: confirm upload with Canvas auth, if redirected) |
 | DELETE   | `/api/v1/files/:id`                                                   | `delete_file`, `reset_course` |
 | GET      | `/api/v1/courses/:id/rubrics`                                         | `preview_course_reset`, `reset_course` |
+| POST     | `/api/v1/courses/:id/rubrics`                                         | `create_rubric` (creates rubric + association in one call) |
+| POST     | `/api/v1/courses/:id/rubric_associations`                             | `associate_rubric`, `reset_course` (zombie recovery) |
 | DELETE   | `/api/v1/courses/:id/rubrics/:id`                                     | `reset_course` |
-| PUT      | `/api/v1/courses/:id`                                                 | `clear_syllabus`, `reset_course` (clear syllabus_body) |
+| PUT      | `/api/v1/courses/:id`                                                 | `update_syllabus`, `clear_syllabus`, `reset_course` (clear syllabus_body) |
 | GET      | `/api/v1/courses/:id/enrollments`                                     | `get_class_grade_summary`, `get_student_report` |
 | GET      | `/api/v1/courses/:id/students/submissions`                            | `get_class_grade_summary`, `get_missing_assignments`, `get_late_assignments`, `get_student_report` |
 | GET      | `/api/v1/courses/:id/assignments/:assignment_id/submissions`          | `get_assignment_breakdown` |
@@ -1354,10 +1479,10 @@ Phase 5 implemented `reset_course` but only deletes modules, assignments, quizze
 |---|---|---|---|---|
 | **Discussion Topics** | `delete_discussion` | Step 5 (after assignments) | `GET .../discussion_topics` → `DELETE .../discussion_topics/:id` | Graded discussions are also assignments — some will 404 after step 3, handle gracefully. Same overlap pattern as quizzes ↔ assignments. |
 | **Announcements** | `delete_announcement` | Included in step 5 | `GET .../discussion_topics?only_announcements=true` → `DELETE .../discussion_topics/:id` | Announcements are discussion topics with `is_announcement=true`. A single pass over all discussion topics covers both. Preview should count them separately for clarity. |
-| **Files** | `delete_file` | Step 7 (after pages) | `GET .../files` → `DELETE /api/v1/files/:id` | File deletion is **irreversible** — no trash/recycle bin via the API. |
-| **Syllabus** | `clear_syllabus` | Step 10 (last) | `PUT /api/v1/courses/:id` with `{ course: { syllabus_body: '' } }` | Not a delete — clears the syllabus body to empty string. |
-| **Rubrics** | — (no standalone tool needed) | Step 8 (after files) | `GET .../rubrics` → `DELETE .../rubrics/:id` | Orphaned rubrics remain after assignment deletion. Clean up after assignments. |
-| **Assignment Groups** | — (no standalone tool needed) | Step 9 (after rubrics) | `GET .../assignment_groups` → `DELETE .../assignment_groups/:id` | All groups are empty after step 3. Canvas always keeps at least one group — skip error on last deletion. |
+| **Files** | `delete_file` | Step 6 (after pages) | `GET .../files` → `DELETE /api/v1/files/:id` | File deletion is **irreversible** — no trash/recycle bin via the API. |
+| **Syllabus** | `clear_syllabus` | Step 9 (last) | `PUT /api/v1/courses/:id` with `{ course: { syllabus_body: '' } }` | Not a delete — clears the syllabus body to empty string. |
+| **Rubrics** | `create_rubric`, `associate_rubric` (added Phase 5b+) | Step 7 (after files) | `GET .../rubrics` → `DELETE .../rubrics/:id` | MCP-created rubrics are always assignment-associated and are pre-deleted when their assignment is deleted (step 2). Step 7 sweeps any orphans (e.g., Canvas-UI-created rubrics). **Zombie state warning:** a rubric with no active associations returns 500 on DELETE — recovery added in Phase 5b+ (see Section 12). |
+| **Assignment Groups** | — | Step 8 (after rubrics) | `GET .../assignment_groups` → `DELETE .../assignment_groups/:id` | All groups are empty after step 2. Canvas always keeps at least one group — skip error on last deletion. |
 
 **New canvas/ module files:** `src/canvas/discussions.ts`, `src/canvas/files.ts`, `src/canvas/rubrics.ts`
 
@@ -1369,12 +1494,13 @@ Phase 5 implemented `reset_course` but only deletes modules, assignments, quizze
 
 **Updated deletion order for `reset_course`:**
 1. Modules (structure only)
-2. Assignments (also removes graded discussions + quiz-backed assignments)
+2. Assignments (also removes graded discussions + quiz-backed assignments; each pre-deletes its associated rubric)
 3. Quizzes (remaining; handle 404s)
-4. Discussion topics including announcements (remaining; handle 404s from graded discussions)
+4a. Discussion topics (remaining; handle 404s from graded discussions already deleted)
+4b. Announcements (separate query: `?only_announcements=true`)
 5. Pages (unset front page first)
 6. Files
-7. Rubrics (orphans from deleted assignments)
+7. Rubrics (remaining orphans; zombie recovery added in Phase 5b+)
 8. Assignment groups (all empty; skip last if Canvas errors)
 9. Clear syllabus body
 
@@ -1396,28 +1522,75 @@ Deleting assignments first cascades to quiz-backed and graded-discussion assignm
 
 ---
 
-### Phase 6 — FERPA PII Blinding
+### Phase 5b+ — Creation Tools & Rubric Architecture - COMPLETE
 
-**Prerequisites:** Phase 2 complete (reporting tools must exist before adding blinding middleware).
+**Prerequisites:** Phase 5b complete.
 
-Student names and Canvas user IDs returned by the Phase 2 reporting tools are FERPA-protected PII. When the MCP server is used with a cloud-hosted AI assistant (e.g., Claude), that data passes through a third-party model context. Phase 6 adds an opt-in blinding layer that intercepts reporting tool responses before they reach the LLM, replacing student-identifiable fields with deterministic opaque tokens, and writes a local sidecar map file that the LLM cannot read.
+Adds creation tools for the content types introduced in Phase 5b (which only added delete and reset support), plus a rubric association tool and syllabus update tool. Also enforces the correct Canvas rubric architecture to prevent zombie rubric state.
 
-See [Section 14](#14-ferpa-pii-blinding) for full design details.
+**New tools:**
+- `create_discussion` — creates a discussion topic
+- `create_announcement` — creates an announcement (discussion with `is_announcement: true`)
+- `upload_file` — 3-step Canvas/S3 file upload protocol
+- `create_rubric` — creates a rubric and immediately associates it with an assignment (required by Canvas — see Rubric Architecture below)
+- `associate_rubric` — associates an existing rubric with a different assignment
+- `update_syllabus` — sets the course syllabus body
 
-**Deliverables:**
-- `src/pii/tokenizer.ts` — deterministic token generation
-- `src/pii/map.ts` — sidecar map file read/write
-- `src/pii/middleware.ts` — wraps reporting tool handlers: blinds output PII, resolves token inputs
-- Config additions: `piiBlinding.enabled`, `piiBlinding.installationSecret`, `piiBlinding.mapPath`
-- New tools: `resolve_student`, `list_blinded_students`
-- `.claudeignore` file in the project root documenting the map file location
-- Updated `get_student_report` input schema: accepts `student_token` (string) in addition to `student_id` (number)
+**Rubric Architecture — Canvas Limitation:**
+
+Canvas does not support standalone rubrics. A rubric must have at least one active assignment association or it enters an inconsistent "zombie" state: it is visible in `GET /courses/:id/rubrics` (the list endpoint) but returns `404` on `GET /courses/:id/rubrics/:id` (the individual endpoint) and `500` on `DELETE`. This is a Canvas-side bug — the rubric list and rubric detail APIs are inconsistent.
+
+**Prevention:** `create_rubric` requires `assignment_id` and sends both `rubric` and `rubric_association` params in a single `POST /api/v1/courses/:id/rubrics` call. This guarantees every MCP-created rubric is associated from the moment it is created.
+
+**Recovery during `reset_course`:** MCP-created rubrics are already deleted in step 3 (when their host assignment is deleted). Step 8 sweeps any remaining rubrics (e.g., rubrics created via the Canvas UI). If a rubric returns 500 on DELETE (zombie state), the recovery sequence is: (1) create a temporary assignment, (2) `POST /rubric_associations` to associate the zombie rubric with it, (3) retry `DELETE /rubrics/:id` (now succeeds), (4) delete the temp assignment. If recovery also fails, the rubric ID is tracked in `rubrics_failed` in the response and a warning is emitted — the reset continues.
+
+**New/modified files:**
+- `src/canvas/discussions.ts` — added `createDiscussionTopic`
+- `src/canvas/files.ts` — added `uploadFile` (3-step protocol)
+- `src/canvas/rubrics.ts` — updated `createRubric` to require `assignment_id` and send `rubric_association` params; added `createRubricAssociation`; `CreateRubricParams.assignment_id` is required
+- `src/tools/content.ts` — added 6 new tool registrations; updated `create_rubric` schema to require `assignment_id`
+- `src/tools/reset.ts` — updated step 8 with zombie recovery (create temp assignment + association, retry delete); updated step 5 to include announcements; added `createAssignment` and `createRubricAssociation` imports
 
 **Tests written in this phase:**
-- Unit: tokenizer is deterministic (same inputs always produce same token), produces different tokens for different Canvas IDs, map file read/write roundtrip, middleware correctly replaces `id`/`name`/`sortable_name` with tokens, token input resolution on `get_student_report`
-- Integration: with `piiBlinding.enabled=true`, no real student names or Canvas IDs appear in any reporting tool output; `resolve_student` correctly resolves a token to the real Canvas ID; `get_student_report` with a token input works end-to-end
+- Unit: `create_discussion`, `create_announcement`, `upload_file` (3-step mock), `create_rubric` (verifies assignment_id in POST body + numeric-keyed criteria format + association response fields), `associate_rubric` (verifies wrapped response unwrapping), `update_syllabus` — 2 tests each (success + no-active-course)
+- Integration: all 6 new tools verified against live Canvas; `associate_rubric` tests re-association of an existing rubric to a second assignment; reset integration updated to create assignment before rubric in test setup
 
-**Exit criterion:** With `piiBlinding.enabled=true`, no student-identifiable data appears in any reporting tool response. Tokens are stable across server restarts. `resolve_student` unblínds correctly. All Phase 6 tests pass.
+**Result:** 148 unit tests passing.
+
+**Exit criterion:** All 6 creation tools work end-to-end. `create_rubric` always produces an associated rubric — no zombie state possible via MCP tools. `reset_course` handles pre-existing zombie rubrics via the recovery sequence. All Phase 5b+ tests pass.
+
+---
+
+### Phase 6 — FERPA / UC / CSU PII Blinding
+
+**Prerequisites:** Phase 2 complete (reporting tools must exist before adding the blinding layer).
+
+**Regulatory context:** Student grade records, submission data, names, and Canvas IDs are FERPA-protected PII. UC and CSU system policies additionally require that student data not be transmitted to third-party systems without explicit consent. When this server is used with a cloud-hosted LLM (Claude Desktop → Anthropic API), every tool response containing student PII is transmitted to a third-party. Phase 6 eliminates that exposure.
+
+**Core requirement:** Blinding is **always on and cannot be disabled**. There is no opt-in switch. The LLM sees only opaque session tokens; real student data never leaves the local machine.
+
+See [Section 14](#14-ferpa-pii-blinding) for the full security architecture.
+
+**Deliverables:**
+- `src/security/secure-store.ts` — `SecureStore` class: AES-256-GCM in-memory encryption, mlocked session key, zero-fill on exit
+- `src/tools/reporting.ts` — modified to accept `SecureStore`, blind all student PII in output, emit dual-audience MCP responses (`audience: ["assistant"]` for tokens, `audience: ["user"]` for the lookup table)
+- `src/index.ts` — modified to instantiate `SecureStore` on startup, register `SIGINT`/`SIGTERM`/`SIGHUP` handlers that call `secureStore.destroy()`, pass `SecureStore` to `registerReportingTools`
+- New tools: `resolve_student`, `list_blinded_students`
+- `get_student_report` input schema updated to accept `student_token` (string) in place of `student_id` (number)
+- `package.json` — add `mlock` native dependency
+- Startup command updated to include `--secure-heap=65536`
+
+**No config additions.** The feature has no on/off switch and requires no persistent state.
+
+**New files:** `src/security/secure-store.ts`
+
+**Modified files:** `src/tools/reporting.ts`, `src/index.ts`, `package.json`
+
+**Tests written in this phase:**
+- Unit: `SecureStore.tokenize()` returns consistent token for same Canvas ID within a session; different IDs get different tokens; `SecureStore.resolve()` decrypts correctly; `SecureStore.destroy()` zero-fills session key; reporting tool responses contain no raw student names or Canvas IDs in the `assistant`-audience content block; `audience` annotations are present and correct; `get_student_report` accepts a token and resolves it correctly
+- Integration: no real student names or Canvas IDs appear in any reporting tool's `assistant`-audience content; `resolve_student` response carries `audience: ["user"]`; `get_student_report` called with a token from a prior `get_class_grade_summary` call returns correct student data
+
+**Exit criterion:** No student name or Canvas numeric ID appears in any content block addressed to the LLM (`audience: ["assistant"]`). The `SecureStore` session key survives process startup, responds to decryption correctly, and is zeroed on process exit. All Phase 6 tests pass. `mlock` is confirmed effective on the target platform (verified via `/proc/self/status VmLck` on Linux or equivalent).
 
 ---
 
@@ -1536,6 +1709,8 @@ These are explicitly planned future capabilities, documented here so that design
 | File deletion is irreversible | `DELETE /api/v1/files/:id` has no undo — Canvas provides no recycle bin via the API. The `reset_course` preview explicitly shows file counts so the user can confirm. |
 | Assignment group minimum | Canvas always keeps at least one assignment group per course. `reset_course` deletes all groups but handles the error on the last one gracefully. |
 | Graded discussion ↔ assignment overlap | Graded discussions are also assignments. Deleting assignments in `reset_course` step 3 cascade-deletes their graded discussions. The discussion deletion step (step 5) handles the resulting 404s gracefully, same pattern as the quiz ↔ assignment overlap. |
+| Rubric zombie state (Canvas bug) | Canvas rubrics with zero active assignment associations enter an inconsistent zombie state: they appear in the course rubric list (`GET /courses/:id/rubrics`) but return `404` on the individual GET and `500` on DELETE. This is caused by creating rubrics via the Canvas UI without linking them to an assignment, or by deleting all assignments associated with a rubric without first deleting the rubric. **Prevention:** `create_rubric` always requires `assignment_id` and creates the rubric + association atomically. **Recovery:** `reset_course` step 8 detects zombie rubrics (DELETE returns non-404 error) and revives them by creating a temporary assignment, associating the rubric, deleting the rubric, then deleting the temp assignment. Rubrics that cannot be recovered are reported in `rubrics_failed`. |
+| `delete_assignment` pre-deletes rubric | When deleting an assignment that has an associated rubric (`rubric_settings.id` present), `delete_assignment` first calls `DELETE /courses/:id/rubrics/:id` before deleting the assignment. Canvas returns 500 when you try to delete an assignment whose rubric was already deleted separately; the pre-delete ensures the cleanup order is always safe. |
 | Calendar events | Course-level calendar events (e.g., office hours, review sessions) are not deleted by `reset_course`. These are less common and considered optional cleanup. API: `GET /calendar_events?context_codes[]=course_X` → `DELETE /calendar_events/:id`. |
 | Learning outcomes | Outcome groups/links are not deleted by `reset_course`. Often institution-level and shared across courses. API exists (`GET/DELETE .../outcome_groups/:id`) but rarely needed for a content reset. |
 | Rate limits | Canvas imposes rate limits that vary by institution. The client applies conservative delays but very large batch operations (e.g., full sandbox reset on a large course) may hit limits and require retries. |
@@ -1609,7 +1784,7 @@ All integration tests run against a **free Instructure Canvas account** (`https:
 
 **Run command:** `npm test` (runs on every push, no credentials required)
 
-**Result:** 125 unit tests passing
+**Result:** 148 unit tests passing
 
 ---
 
@@ -1736,7 +1911,7 @@ Each phase's exit criterion includes passing its associated tests before moving 
 | 3 — Low-level creation | Input validation, template rendering | `add_module_item`, `create_assignment`, `create_quiz` round-trips | Write tool schema validation |
 | 4 — High-level creation | `dry_run` validation, slot matching, partial failure | Lesson + solution module suites, clone suite | High-level tool schemas |
 | 5 — Destructive ops | Confirmation text matching | Full sandbox reset suite | Destructive tool schemas |
-| 6 — PII Blinding | Tokenizer determinism, map file I/O, middleware output/input interception | End-to-end blinding with real Canvas data, `resolve_student` unblinding | Blinded tool response format |
+| 6 — PII Blinding | `SecureStore` encrypt/decrypt roundtrip, token consistency, zero-fill on destroy, `audience` annotations in reporting tool responses, token input resolution on `get_student_report` | No raw PII in `assistant`-audience content blocks; `resolve_student` carries `audience: ["user"]`; token round-trip from `get_class_grade_summary` → `get_student_report` | Blinded tool response format; `audience` annotation handling |
 
 ---
 
@@ -1751,18 +1926,20 @@ Each phase's exit criterion includes passing its associated tests before moving 
 
 ---
 
-## 14. FERPA PII Blinding
+## 14. FERPA / UC / CSU PII Blinding
 
-### 14.1 Background and Motivation
+### 14.1 Background and Regulatory Context
 
-Student grade records, submission data, and attendance are personally identifiable information (PII) regulated by FERPA (Family Educational Rights and Privacy Act). When the MCP server is used with a cloud-hosted AI assistant such as Claude, tool responses containing student names and Canvas IDs are transmitted to and processed by a third-party model. Even if data is not retained by the provider, the act of transmission may constitute a FERPA disclosure risk.
+Student grade records, submission data, names, and Canvas numeric IDs are personally identifiable information (PII) regulated by:
 
-The PII Blinding feature addresses this by:
+- **FERPA** (Family Educational Rights and Privacy Act) — prohibits disclosure of student education records to third parties without consent.
+- **UC and CSU system security policies** — require that student PII not be transmitted to external systems without explicit data-sharing agreements.
 
-1. Intercepting reporting tool responses **before** they reach the LLM and replacing student names and Canvas IDs with deterministic, opaque tokens (e.g., `STU-3F9A1C2D`).
-2. Maintaining a **local sidecar map file** that maps tokens back to real student data — this file is never transmitted to the LLM.
-3. Hiding the map file from the AI assistant via `.claudeignore` (or equivalent ignore mechanism).
-4. Providing **controlled unblinding tools** that allow the instructor to intentionally surface a real student name when needed (e.g., to send a follow-up email), creating a clear audit boundary.
+When this MCP server is used with a cloud-hosted AI assistant (Claude Desktop → Anthropic API), every tool response passes through the provider's infrastructure. A reporting tool that returns `"Jane Smith, score 87"` in its response sends that string to Anthropic's servers as part of the model context — regardless of the provider's data retention policy.
+
+**This feature eliminates that exposure entirely.** The LLM operates only on opaque session tokens. Real student data never leaves the local machine in any form.
+
+Blinding is **always on and cannot be disabled.** This is an architectural constraint, not a configuration option.
 
 ---
 
@@ -1770,146 +1947,203 @@ The PII Blinding feature addresses this by:
 
 | Principle | Detail |
 |---|---|
-| **Deterministic tokens** | A given Canvas user ID in a given course always maps to the same token, across sessions and server restarts. |
-| **Local-only PII** | The sidecar map file lives in the MCP config directory (`~/.canvas-teacher-mcp/`) and is never included in any API call or tool response. |
-| **Opt-in** | PII blinding is disabled by default. Existing workflows are unaffected unless the instructor explicitly enables it in config. |
-| **Controlled unblinding** | A dedicated `resolve_student` tool returns real PII for a given token. Its use is explicit and intentional. |
-| **No changes to Canvas API layer** | Blinding is a presentation concern. The underlying Canvas API calls, data models, and business logic in `src/canvas/` are unchanged. |
+| **Always on** | No opt-in switch. Blinding is unconditional and cannot be disabled via config or code. |
+| **Memory-only** | No PII map file is written to disk at any point. All token-to-identity mappings exist exclusively in volatile process RAM for the lifetime of the server process. |
+| **Encrypted at rest in RAM** | PII is stored AES-256-GCM encrypted even in memory. The session key is the only secret; the ciphertext blobs are safe even if the OS pages them to swap. |
+| **Session-scoped tokens** | Tokens (`[STUDENT_001]`) are assigned in encounter order within a process lifetime. Restarting the server resets the counter. There is no cross-session token persistence — this is intentional. |
+| **Least-privilege display** | The LLM receives only blinded content (`audience: ["assistant"]`). The human user sees a decrypted lookup table in the UI (`audience: ["user"]`) via MCP content annotations. |
+| **No changes to Canvas API layer** | Blinding is a presentation concern. `src/canvas/` is entirely unchanged. |
+| **No config additions** | The feature requires no persistent state and no configuration entries. |
 
 ---
 
-### 14.3 Token Format
+### 14.3 Threat Model
 
-Tokens take the form `STU-XXXXXXXX`, where `XXXXXXXX` is the first 8 hex characters (uppercase) of:
-
-```
-SHA-256( courseId + ":" + canvasUserId + ":" + installationSecret )
-```
-
-- `installationSecret` is a random 32-byte hex string generated once on first use and stored in config. It ensures tokens are unguessable from Canvas IDs alone and are unique per installation.
-- The same (courseId, canvasUserId) pair always produces the same token for a given installation, making tokens stable across server restarts and sessions.
-
-Example output: `STU-3F9A1C2D`
+| Threat | Mitigation |
+|---|---|
+| Student PII transmitted to cloud LLM | Reporting tools emit only `[STUDENT_NNN]` tokens in `assistant`-audience content. Real names never appear in that content block. |
+| PII map swapped to disk by OS | Session key is mlocked. PII values are AES-256-GCM encrypted; what reaches disk (if the OS swaps ciphertext pages before they are zeroed) is ciphertext, not plaintext. |
+| Key material recoverable from process memory dump / core dump | Session key is zeroed (`Buffer.fill(0)`) on `SIGINT`, `SIGTERM`, `SIGHUP`, and `uncaughtException` before process exit. |
+| Key material in OpenSSL internal buffers | `--secure-heap=65536` Node.js flag allocates an OpenSSL-internal mlocked heap for cryptographic operation intermediates. |
+| Token guessing / reverse-engineering | Tokens are sequential integers with no relationship to any student property. Token assignment order changes on every server restart. |
+| `audience` annotation ignored by MCP client | If a client ignores annotations, the human-visible lookup table would also reach the LLM. This is noted as a client-contract assumption. The LLM-visible blinded content remains tokens regardless. |
 
 ---
 
-### 14.4 Sidecar Map File
+### 14.4 SecureStore Architecture (`src/security/secure-store.ts`)
 
-**Default location:** `~/.canvas-teacher-mcp/pii-map.json`
-**Configurable via:** `piiBlinding.mapPath` in config
+The `SecureStore` class is a singleton instantiated once at server startup and held for the process lifetime.
 
-```jsonc
-{
-  "STU-3F9A1C2D": {
-    "canvas_id": 12345,
-    "course_id": 67890,
-    "name": "Jane Smith",
-    "sortable_name": "Smith, Jane",
-    "first_seen": "2026-02-01T10:00:00Z",
-    "last_seen": "2026-02-21T14:30:00Z"
-  },
-  "STU-A7C2F1B8": {
-    "canvas_id": 12346,
-    "course_id": 67890,
-    "name": "John Doe",
-    "sortable_name": "Doe, John",
-    "first_seen": "2026-02-01T10:00:00Z",
-    "last_seen": "2026-02-18T09:15:00Z"
+#### Session key
+
+```typescript
+// 32-byte AES-256 key, generated fresh on each process start
+const sessionKey = Buffer.allocUnsafe(32)
+crypto.randomFillSync(sessionKey)
+
+// Best-effort mlock: pin the key pages in RAM to prevent OS swap.
+// Fails silently on platforms where mlock is unavailable or restricted.
+// A 32-byte buffer is within the locked-memory limit on all platforms.
+try { mlock(sessionKey) } catch { /* best-effort */ }
+```
+
+#### In-memory encrypted map
+
+Each entry stores the AES-256-GCM ciphertext, IV, and auth tag — never plaintext:
+
+```typescript
+interface EncryptedEntry {
+  iv: Buffer         // 12 bytes, random per entry
+  ciphertext: Buffer // AES-256-GCM encrypted JSON: { canvasId: number, name: string }
+  tag: Buffer        // 16-byte GCM authentication tag
+}
+
+private readonly map: Map<string, EncryptedEntry>   // token → encrypted entry
+private readonly idToToken: Map<number, string>     // canvasUserId → token (no PII here)
+```
+
+#### Tokenization
+
+```typescript
+tokenize(canvasUserId: number, name: string): string {
+  // Return existing token if this Canvas ID was seen before
+  const existing = this.idToToken.get(canvasUserId)
+  if (existing) return existing
+
+  // Assign next sequential token
+  const token = `[STUDENT_${String(++this.counter).padStart(3, '0')}]`
+
+  // Encrypt { canvasId, name } with AES-256-GCM, fresh IV per entry
+  const iv = crypto.randomBytes(12)
+  const cipher = crypto.createCipheriv('aes-256-gcm', this.sessionKey, iv)
+  const plain = JSON.stringify({ canvasId: canvasUserId, name })
+  const ciphertext = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()])
+  const tag = cipher.getAuthTag()
+
+  this.map.set(token, { iv, ciphertext, tag })
+  this.idToToken.set(canvasUserId, token)
+  return token
+}
+```
+
+#### On-demand decryption (for human display only)
+
+```typescript
+resolve(token: string): { canvasId: number; name: string } | null {
+  const entry = this.map.get(token)
+  if (!entry) return null
+  const decipher = crypto.createDecipheriv('aes-256-gcm', this.sessionKey, entry.iv)
+  decipher.setAuthTag(entry.tag)
+  // Throws if auth tag mismatch — should never happen in normal operation
+  const plain = Buffer.concat([decipher.update(entry.ciphertext), decipher.final()])
+  return JSON.parse(plain.toString('utf8'))
+}
+```
+
+#### Process exit cleanup
+
+```typescript
+destroy(): void {
+  this.sessionKey.fill(0)        // zero-fill the AES key
+  for (const e of this.map.values()) {
+    e.iv.fill(0)
+    e.ciphertext.fill(0)
+    e.tag.fill(0)
+  }
+  this.map.clear()
+  this.idToToken.clear()
+}
+```
+
+Signal handlers in `src/index.ts`:
+
+```typescript
+const cleanup = () => { secureStore.destroy(); process.exit(0) }
+process.on('SIGINT',  cleanup)
+process.on('SIGTERM', cleanup)
+process.on('SIGHUP',  cleanup)
+process.on('uncaughtException', (err) => { cleanup() })
+```
+
+---
+
+### 14.5 Token Format
+
+`[STUDENT_001]`, `[STUDENT_002]`, ... — sequential integers, zero-padded to 3 digits, assigned in the order students are first encountered during a session.
+
+**Properties:**
+- No relationship to Canvas IDs, names, or any student attribute — cannot be reverse-engineered.
+- Consistent within a session: calling `get_class_grade_summary` twice in the same session gives `[STUDENT_001]` to the same person both times (via the `idToToken` map).
+- Reset on restart: `[STUDENT_001]` in one session may refer to a different person in the next. This is a deliberate security property — stale tokens in LLM context from a previous session are simply unresolvable.
+
+---
+
+### 14.6 MCP `audience` Annotations — The Display Mechanism
+
+The MCP protocol supports per-content-block `audience` annotations:
+
+```typescript
+interface TextContent {
+  type: "text"
+  text: string
+  annotations?: {
+    audience?: ("user" | "assistant")[]  // who this content block is for
+    priority?: number
   }
 }
 ```
 
-The map file is **additive** — entries are written on first encounter and `last_seen` is updated on subsequent encounters. Existing entries are never deleted automatically.
-
----
-
-### 14.5 Hiding the Map File from the LLM
-
-The map file must be excluded from AI assistant context. Two mechanisms apply:
-
-**`.claudeignore` (Claude Code / Claude Desktop):**
-A `.claudeignore` file in the working project directory or home directory can list the map file path. Absolute paths are supported. Example:
-
-```
-# FERPA PII map — never expose to AI
-~/.canvas-teacher-mcp/pii-map.json
-```
-
-**`.gitignore`:**
-The map file must also be excluded from version control since it contains real student PII. Add to `.gitignore`:
-
-```
-# FERPA PII sidecar map
-~/.canvas-teacher-mcp/pii-map.json
-```
-
-**Setup tool (optional):**
-A `setup_pii_blinding` tool (or a one-time CLI script) can automate writing the correct ignore entries to the appropriate files in the instructor's working directory.
-
----
-
-### 14.6 Impact on Phase 2 Reporting Tools
-
-Five of the eight reporting tools return student PII and require blinding when the feature is enabled. No changes are needed to the tools' internal logic or Canvas API calls — the blinding layer is implemented as middleware that wraps the tool handlers.
-
-| Tool | PII in output | PII in input | Blinding action |
-|---|---|---|---|
-| `list_modules` | None | None | No change |
-| `get_module_summary` | None | None | No change |
-| `list_assignment_groups` | None | None | No change |
-| `get_class_grade_summary` | `id`, `name`, `sortable_name` per student | None | Replace with token; write to map |
-| `get_assignment_breakdown` | `student_name`, `student_id` per submission | None | Replace with token; write to map |
-| `get_student_report` | `id`, `name` in student field | `student_id` (number) | Replace output PII with token; **input extended to accept token** |
-| `get_missing_assignments` | `id`, `name`, `sortable_name` per student | None | Replace with token; write to map |
-| `get_late_assignments` | `id`, `name`, `sortable_name` per student | None | Replace with token; write to map |
-
-**The `get_student_report` input change** is the most significant:
-Currently the tool takes `student_id: number` (a raw Canvas user ID). When blinding is active, the LLM only has tokens and cannot supply a Canvas ID. The input schema must be extended to accept either a Canvas ID (number) or a PII token (string in `STU-XXXXXXXX` format). The middleware resolves a token to its Canvas ID via the map file before the underlying tool logic executes.
-
-This is a **non-breaking addition**: the Canvas ID path continues to work unchanged. The token path is new.
-
----
-
-### 14.7 Architecture
-
-The blinding layer is implemented as middleware that wraps `registerReportingTools`. No changes to `src/canvas/` or the underlying tool handlers are required.
-
-```
-Tool input (from LLM)
-        ↓
-  [PII Middleware — Input]        ← Phase 6 addition
-  - If student_token present:
-      resolve token → canvas_id via map file
-  - Forward resolved input to tool handler
-        ↓
-  [Tool handler — unchanged]
-  - Fetches from Canvas API
-  - Returns raw data with real names/IDs
-        ↓
-  [PII Middleware — Output]       ← Phase 6 addition
-  - For each student record:
-      generate/lookup token for (courseId, canvasUserId)
-      replace id/name/sortable_name with token
-      update map file entry (last_seen)
-  - Return blinded response to LLM
-        ↓
-  LLM context (tokens only, no real PII)
-```
-
-**Implementation sketch (`src/pii/middleware.ts`):**
+Every reporting tool response that contains student data emits **two content blocks**:
 
 ```typescript
-// Wraps registerReportingTools with blinding when piiBlinding.enabled = true
-export function registerReportingToolsWithBlinding(
+return {
+  content: [
+    {
+      type: "text",
+      text: JSON.stringify(blindedReport),           // tokens only
+      annotations: { audience: ["assistant"] }       // LLM context
+    },
+    {
+      type: "text",
+      text: buildLookupTable(resolvedEntries),        // "[STUDENT_001] → Jane Smith\n..."
+      annotations: { audience: ["user"] }            // human-visible in Claude Desktop UI
+    }
+  ]
+}
+```
+
+**Result:** The LLM reasons about `[STUDENT_001]` with no knowledge of identity. The instructor sees the real name in Claude Desktop's UI alongside the LLM's output — no extra tool call needed for routine use.
+
+**Client-contract assumption:** The `audience` annotation is part of the MCP specification. Claude Desktop is expected to honor it by excluding `user`-only content from the assistant's context window. This must be verified empirically during Phase 6 testing. If a client ignores annotations, the lookup table reaches the LLM — which is less than ideal but still safe, since the LLM would then know names but the Canvas numeric IDs remain absent from all tool inputs/outputs.
+
+---
+
+### 14.7 Impact on Reporting Tools
+
+Five tools return student PII and require modification. No changes to `src/canvas/` are needed.
+
+| Tool | PII in output | PII in input | Change |
+|---|---|---|---|
+| `list_modules` | None | None | None |
+| `get_module_summary` | None | None | None |
+| `list_assignment_groups` | None | None | None |
+| `get_class_grade_summary` | `id`, `name` per student | None | Replace with token; emit dual-audience response |
+| `get_assignment_breakdown` | `student_name`, `student_id` | None | Replace with token; emit dual-audience response |
+| `get_student_report` | `id`, `name` | `student_id` (number) | Replace output PII with token; **input changed to `student_token` (string)** |
+| `get_missing_assignments` | `id`, `name` per student | None | Replace with token; emit dual-audience response |
+| `get_late_assignments` | `id`, `name` per student | None | Replace with token; emit dual-audience response |
+
+**`get_student_report` input change:** With blinding always on, the LLM only knows tokens and cannot supply a raw Canvas user ID. The input schema changes `student_id: number` to `student_token: string`. The tool calls `store.resolve(token)` internally to get the Canvas ID, then proceeds with the normal Canvas API call. The Canvas ID is never exposed to the LLM — only the blinded report goes to the `assistant`-audience block.
+
+The `registerReportingTools` function signature gains one parameter:
+
+```typescript
+export function registerReportingTools(
   server: McpServer,
   client: CanvasClient,
   configManager: ConfigManager,
-  tokenizer: PiiTokenizer,
-  mapStore: PiiMapStore,
-): void {
-  // Intercept each student-facing tool handler
-  // Apply blinding on output, token resolution on input
-}
+  secureStore: SecureStore,          // ← new
+): void
 ```
 
 ---
@@ -1918,49 +2152,70 @@ export function registerReportingToolsWithBlinding(
 
 #### `resolve_student`
 
-**Purpose:** Unblind a PII token — return the real name and Canvas ID for a given token. This tool intentionally transmits PII to the LLM context; its use should be purposeful (e.g., "Look up the real name for STU-3F9A1C2D so I can compose a follow-up email").
+**Purpose:** Explicitly unblind a token — decrypt and return the real name and Canvas ID for the current session. The response is marked `audience: ["user"]` so it appears in Claude Desktop's UI only, not in the LLM's context, preserving the zero-knowledge property even during intentional unblinding.
 
 **Inputs:**
-- `token` (string, required): A PII token in `STU-XXXXXXXX` format.
-- `course_id` (number, optional): Disambiguates if the same token exists in multiple courses (rare).
+- `student_token` (string, required): A session token in `[STUDENT_NNN]` format.
 
-**Output:** `{ token, canvas_id, name, course_id }`
+**Output:** `{ student_token, name, canvas_id }` — with `audience: ["user"]` annotation.
 
 **Notes:**
-- Returns an error if the token is not found in the local map file.
-- Does not make any Canvas API calls — reads from the local map file only.
-- Future enhancement: write an audit log entry (`~/.canvas-teacher-mcp/unblind-log.jsonl`) with timestamp and context.
+- Returns an error if the token is not found (e.g., from a previous session).
+- No Canvas API call — resolves entirely from the in-memory `SecureStore`.
+- Canonical use case: "Look up who `[STUDENT_003]` is so I can draft a follow-up email."
 
 ---
 
 #### `list_blinded_students`
 
-**Purpose:** List all known tokens for a course without revealing the underlying PII. Lets the instructor see which tokens are active and when they were last seen — useful for auditing or for asking the LLM to work with a specific student by token.
+**Purpose:** List all tokens registered in the current session. Shows only tokens and counter positions — no PII. Lets the LLM enumerate students for batch operations without ever learning names.
 
-**Inputs:**
-- `course_id` (number, optional).
+**Inputs:** *(none)*
 
-**Output:** Array of `{ token, first_seen, last_seen }` — deliberately omits names and Canvas IDs.
+**Output:** Array of `{ token }` — ordered by encounter. Intentionally omits names and Canvas IDs.
 
 ---
 
-### 14.9 Config Schema Additions
+### 14.9 Dependencies and Platform Requirements
 
-```jsonc
+#### `mlock` native addon
+
+The `mlock` npm package provides Node.js bindings for the POSIX `mlock()` / `mlockall()` system calls.
+
+```
+npm install mlock
+```
+
+This is a **native addon** — it requires compilation at install time:
+- **macOS:** Xcode Command Line Tools (`xcode-select --install`)
+- **Linux:** `build-essential` (`sudo apt install build-essential` or equivalent)
+- **Windows:** Not supported without WSL. The `mlock` call is skipped gracefully on failure.
+
+`mlock` is called on the session key buffer only (32 bytes). This is within the unprivileged `RLIMIT_MEMLOCK` limit on all platforms and does not require root. If the call fails (e.g., unsupported platform), the error is caught and silently ignored — blinding continues fully functional; the only degradation is that the key buffer is not pinned from swap.
+
+#### `--secure-heap` Node.js flag
+
+The startup command must include `--secure-heap=65536`:
+
+```
+node --secure-heap=65536 dist/index.js
+```
+
+This allocates a 64 KB mlocked OpenSSL-internal heap for cryptographic operation intermediates (cipher state, key schedule). This flag has no effect on the V8 heap where our `Map` lives, but it protects the key material during AES operations.
+
+**Claude Desktop `mcp` config entry:**
+
+```json
 {
-  "piiBlinding": {
-    // Enable PII blinding for all student-facing reporting tools.
-    // Default: false (opt-in).
-    "enabled": false,
-
-    // Path to the sidecar PII map file.
-    // Default: null (resolves to ~/.canvas-teacher-mcp/pii-map.json).
-    "mapPath": null,
-
-    // Random secret used as a salt in token generation.
-    // Auto-generated on first use; never change this — doing so invalidates
-    // all existing tokens and breaks cross-session consistency.
-    "installationSecret": "auto-generated-32-byte-hex-string"
+  "mcpServers": {
+    "canvas-teacher-mcp": {
+      "command": "node",
+      "args": ["--secure-heap=65536", "/path/to/canvas-teacher-mcp/dist/index.js"]
+    }
   }
 }
 ```
+
+#### Why not `mlockall()`
+
+`mlockall(MCL_CURRENT | MCL_FUTURE)` locks all virtual memory pages for the entire process into RAM permanently — including the V8 heap, libuv buffers, and the full module graph. On macOS, this requires root and will fail with `EPERM` for unprivileged processes. On Linux, it can cause OOM conditions under memory pressure by removing all swappable pages from the system. We target `mlock()` on the 32-byte session key only — the narrowest possible lock request, guaranteed to succeed.
