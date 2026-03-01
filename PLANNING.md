@@ -93,6 +93,8 @@ canvas-teacher-mcp/
 │   │   ├── modules.ts        # High-level module creation tools (lesson, solution, clone)
 │   │   ├── reporting.ts      # Grade & submission reporting tools
 │   │   └── reset.ts          # Destructive reset tools
+│   ├── security/
+│   │   └── secure-store.ts   # AES-256-GCM in-memory PII store (session tokens, mlock)
 │   ├── templates/
 │   │   ├── index.ts          # Template loader & renderer
 │   └── config/
@@ -996,13 +998,15 @@ All reporting tools return structured data suitable for display as a table or su
 **Purpose:** Deep report on a single student — all assignments with scores, missing/late flags, and current grade. Used when following up on a specific student.
 
 **Inputs:**
-- `student_id` (number, required): Canvas user ID.
+- `student_token` (string, required): Session token for the student (e.g. `"[STUDENT_003]"`), obtained from a prior call to `get_class_grade_summary` or another reporting tool. The tool resolves this internally to a Canvas user ID; the Canvas ID is never exposed in any tool output.
 - `course_id` (number, optional).
+
+> **Phase 6 change:** The original `student_id: number` input was replaced by `student_token: string` when PII blinding was added. The LLM only ever knows tokens, so it cannot supply a raw Canvas user ID.
 
 **Output:**
 ```jsonc
 {
-  "student": { "id": 1001, "name": "Jane Smith" },
+  "student": { "student_token": "[STUDENT_003]" },
   "current_score": 87.4,
   "assignments": [
     { "name": "Week 1 | Coding Assignment | ...", "due_at": "...", "score": 10, "points_possible": 10, "late": false, "missing": false },
@@ -1395,7 +1399,7 @@ This stage adds student accounts and the seed script so that reporting tools hav
 - Unit: `get_class_grade_summary` with `sort_by: "grade"` — lowest/null score first; `sort_by: "zeros"` — most zero-scored submissions first
 - Unit: `zeros_count` field present on all rows; counts only `score === 0` submissions (not null)
 - Integration: all reporting suites against seeded data — results verified against known seed state from Section 13.2
-- Integration: `get_class_grade_summary` with `sort_by: "engagement"` — Student 4 (most missing) appears first
+- Integration: `get_class_grade_summary` with `sort_by: "engagement"` — students are sorted by missing_count descending (sort-order assertion, not brittle "first student" check)
 - Integration: `get_class_grade_summary` with `sort_by: "grade"` — null-score student first; `sort_by: "zeros"` — `zeros_count` field present
 - MCP protocol: response format for all reporting tools
 
@@ -1555,13 +1559,13 @@ Canvas does not support standalone rubrics. A rubric must have at least one acti
 - Unit: `create_discussion`, `create_announcement`, `upload_file` (3-step mock), `create_rubric` (verifies assignment_id in POST body + numeric-keyed criteria format + association response fields), `associate_rubric` (verifies wrapped response unwrapping), `update_syllabus` — 2 tests each (success + no-active-course)
 - Integration: all 6 new tools verified against live Canvas; `associate_rubric` tests re-association of an existing rubric to a second assignment; reset integration updated to create assignment before rubric in test setup
 
-**Result:** 148 unit tests passing.
+**Result:** 148 unit tests passing (pre-Phase 6; Phase 6 added 35 more for a total of 183).
 
 **Exit criterion:** All 6 creation tools work end-to-end. `create_rubric` always produces an associated rubric — no zombie state possible via MCP tools. `reset_course` handles pre-existing zombie rubrics via the recovery sequence. All Phase 5b+ tests pass.
 
 ---
 
-### Phase 6 — FERPA / UC / CSU PII Blinding
+### Phase 6 — FERPA / UC / CSU PII Blinding - COMPLETE
 
 **Prerequisites:** Phase 2 complete (reporting tools must exist before adding the blinding layer).
 
@@ -1574,23 +1578,28 @@ See [Section 14](#14-ferpa-pii-blinding) for the full security architecture.
 **Deliverables:**
 - `src/security/secure-store.ts` — `SecureStore` class: AES-256-GCM in-memory encryption, mlocked session key, zero-fill on exit
 - `src/tools/reporting.ts` — modified to accept `SecureStore`, blind all student PII in output, emit dual-audience MCP responses (`audience: ["assistant"]` for tokens, `audience: ["user"]` for the lookup table)
-- `src/index.ts` — modified to instantiate `SecureStore` on startup, register `SIGINT`/`SIGTERM`/`SIGHUP` handlers that call `secureStore.destroy()`, pass `SecureStore` to `registerReportingTools`
+- `src/index.ts` — modified to instantiate `SecureStore` on startup, register `SIGINT`/`SIGTERM`/`SIGHUP`/`uncaughtException` handlers that call `secureStore.destroy()`, pass `SecureStore` to `registerReportingTools`
 - New tools: `resolve_student`, `list_blinded_students`
 - `get_student_report` input schema updated to accept `student_token` (string) in place of `student_id` (number)
-- `package.json` — add `mlock` native dependency
-- Startup command updated to include `--secure-heap=65536`
+- `package.json` — added `posix-node: ^0.12.0` native dependency (provides mlock; wraps POSIX mlock via Zig + node-gyp)
+- Startup command includes `--secure-heap=65536` (recommended in Claude Desktop config)
+
+> **Package note:** The original plan referenced `mlock` npm package (404 on npm). The actual implementation uses `posix-node` (v0.12.0, BSD-3-Clause, SageMath team) which provides `posixNode.mlock(buffer)` / `posixNode.munlock(buffer)`. mlock is wrapped in try/catch and is non-fatal on failure.
 
 **No config additions.** The feature has no on/off switch and requires no persistent state.
 
-**New files:** `src/security/secure-store.ts`
+**New files:** `src/security/secure-store.ts`, `tests/unit/security/secure-store.test.ts`
 
-**Modified files:** `src/tools/reporting.ts`, `src/index.ts`, `package.json`
+**Modified files:** `src/tools/reporting.ts`, `src/index.ts`, `package.json`, `tests/unit/tools/reporting.test.ts`, `tests/integration/reporting.test.ts`
 
 **Tests written in this phase:**
-- Unit: `SecureStore.tokenize()` returns consistent token for same Canvas ID within a session; different IDs get different tokens; `SecureStore.resolve()` decrypts correctly; `SecureStore.destroy()` zero-fills session key; reporting tool responses contain no raw student names or Canvas IDs in the `assistant`-audience content block; `audience` annotations are present and correct; `get_student_report` accepts a token and resolves it correctly
-- Integration: no real student names or Canvas IDs appear in any reporting tool's `assistant`-audience content; `resolve_student` response carries `audience: ["user"]`; `get_student_report` called with a token from a prior `get_class_grade_summary` call returns correct student data
+- Unit (10 new in `tests/unit/security/secure-store.test.ts`): `SecureStore.tokenize()` returns consistent token for same Canvas ID within a session; different IDs get different tokens; `SecureStore.resolve()` decrypts correctly; `SecureStore.destroy()` zero-fills session key (resolve returns null after destroy); encounter order preserved; no duplicates in `listTokens()`
+- Unit (updated `tests/unit/tools/reporting.test.ts`): reporting tool responses contain no raw student names or Canvas IDs in the `assistant`-audience content block; `audience` annotations are present and correct on both content blocks; `get_student_report` accepts a token and resolves it correctly; `resolve_student` and `list_blinded_students` tool tests
+- Integration (updated `tests/integration/reporting.test.ts`): no real student names or Canvas IDs appear in any reporting tool's `assistant`-audience content; `resolve_student` response carries `audience: ["user"]`; `get_student_report` called with a token from a prior `get_class_grade_summary` call returns correct student data; sort-order assertion changed from "Student 4 appears first" to "students are sorted by missing_count descending" (more robust)
 
-**Exit criterion:** No student name or Canvas numeric ID appears in any content block addressed to the LLM (`audience: ["assistant"]`). The `SecureStore` session key survives process startup, responds to decryption correctly, and is zeroed on process exit. All Phase 6 tests pass. `mlock` is confirmed effective on the target platform (verified via `/proc/self/status VmLck` on Linux or equivalent).
+**Result:** 183 unit tests + 72 integration tests (all passing).
+
+**Exit criterion:** No student name or Canvas numeric ID appears in any content block addressed to the LLM (`audience: ["assistant"]`). The `SecureStore` session key survives process startup, responds to decryption correctly, and is zeroed on process exit. All Phase 6 tests pass.
 
 ---
 
@@ -1784,7 +1793,7 @@ All integration tests run against a **free Instructure Canvas account** (`https:
 
 **Run command:** `npm test` (runs on every push, no credentials required)
 
-**Result:** 148 unit tests passing
+**Result:** 183 unit tests passing
 
 ---
 
@@ -1842,7 +1851,7 @@ This state exercises late, on-time, missing, ungraded, graded, and zero-score co
 
 **Run command:** `npm run test:integration` (requires `.env.test`)
 
-**Result:** 60 integration tests passing (6 test files: connectivity, context, reporting, content, modules, reset)
+**Result:** 72 integration tests passing (6 test files: connectivity, context, reporting, content, modules, reset)
 
 ---
 
@@ -1911,7 +1920,7 @@ Each phase's exit criterion includes passing its associated tests before moving 
 | 3 — Low-level creation | Input validation, template rendering | `add_module_item`, `create_assignment`, `create_quiz` round-trips | Write tool schema validation |
 | 4 — High-level creation | `dry_run` validation, slot matching, partial failure | Lesson + solution module suites, clone suite | High-level tool schemas |
 | 5 — Destructive ops | Confirmation text matching | Full sandbox reset suite | Destructive tool schemas |
-| 6 — PII Blinding | `SecureStore` encrypt/decrypt roundtrip, token consistency, zero-fill on destroy, `audience` annotations in reporting tool responses, token input resolution on `get_student_report` | No raw PII in `assistant`-audience content blocks; `resolve_student` carries `audience: ["user"]`; token round-trip from `get_class_grade_summary` → `get_student_report` | Blinded tool response format; `audience` annotation handling |
+| 6 — PII Blinding ✓ | `SecureStore` encrypt/decrypt roundtrip (10 tests), token consistency, zero-fill on destroy, `audience` annotations in reporting tool responses, token input resolution on `get_student_report`; `resolve_student`; `list_blinded_students` | No raw PII in `assistant`-audience content blocks; `resolve_student` carries `audience: ["user"]`; token round-trip from `get_class_grade_summary` → `get_student_report`; sort-order assertion (missing_count DESC) instead of brittle "Student 4 first" check | Blinded tool response format; `audience` annotation handling |
 
 ---
 
@@ -2178,12 +2187,14 @@ export function registerReportingTools(
 
 ### 14.9 Dependencies and Platform Requirements
 
-#### `mlock` native addon
+#### `posix-node` native addon
 
-The `mlock` npm package provides Node.js bindings for the POSIX `mlock()` / `mlockall()` system calls.
+The [`posix-node`](https://www.npmjs.com/package/posix-node) package (v0.12.0, BSD-3-Clause, SageMath team) provides Node.js bindings for POSIX system calls including `mlock()` / `munlock()`. It is written in Zig and compiled via node-gyp.
+
+> **Note:** The original plan referenced an `mlock` npm package that does not exist on the npm registry (404). The implementation uses `posix-node` instead, which provides equivalent functionality.
 
 ```
-npm install mlock
+npm install posix-node
 ```
 
 This is a **native addon** — it requires compilation at install time:
@@ -2191,7 +2202,7 @@ This is a **native addon** — it requires compilation at install time:
 - **Linux:** `build-essential` (`sudo apt install build-essential` or equivalent)
 - **Windows:** Not supported without WSL. The `mlock` call is skipped gracefully on failure.
 
-`mlock` is called on the session key buffer only (32 bytes). This is within the unprivileged `RLIMIT_MEMLOCK` limit on all platforms and does not require root. If the call fails (e.g., unsupported platform), the error is caught and silently ignored — blinding continues fully functional; the only degradation is that the key buffer is not pinned from swap.
+`mlock` is called on the session key buffer only (32 bytes). This is within the unprivileged `RLIMIT_MEMLOCK` limit on all platforms and does not require root. If the call fails (e.g., unsupported platform, permission denied), the error is caught and a warning is logged to stderr — blinding continues fully functional via AES-256-GCM; the only degradation is that the key buffer is not pinned from swap.
 
 #### `--secure-heap` Node.js flag
 

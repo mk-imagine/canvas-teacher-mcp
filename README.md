@@ -18,28 +18,76 @@ Connect this server to Claude Desktop and ask it to:
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 20+ ([nodejs.org](https://nodejs.org))
+- Git ([git-scm.com](https://git-scm.com))
 - A Canvas LMS account with teacher-level access to at least one course
 - A Canvas API token (Profile → Settings → New Access Token)
+- Claude Desktop ([claude.ai/download](https://claude.ai/download))
 
-## Installation
+## Step-by-step setup (first time)
+
+These instructions assume no prior developer experience. Follow each step in order.
+
+### 1. Install Node.js
+
+Go to [nodejs.org](https://nodejs.org) and download the **LTS** version (the left-hand button). Run the installer and accept all defaults. To confirm it worked, open Terminal (macOS: press ⌘+Space, type "Terminal") and run:
+
+```
+node --version
+```
+
+You should see something like `v22.0.0`. Any version 20 or higher is fine.
+
+### 2. Install Git
+
+On macOS, Git is often already installed. Run `git --version` in Terminal to check. If you see a version number, skip to step 3. If not, download Git from [git-scm.com](https://git-scm.com) and install it.
+
+### 3. Download the project
+
+In Terminal, run:
 
 ```bash
 git clone https://github.com/you/canvas-teacher-mcp
 cd canvas-teacher-mcp
+```
+
+This creates a folder called `canvas-teacher-mcp` in your home directory and places you inside it.
+
+### 4. Install dependencies and build
+
+Still in Terminal, inside the `canvas-teacher-mcp` folder:
+
+```bash
 npm install
 npm run build
 ```
 
-## Configuration
+`npm install` downloads the required packages (~1 minute, requires internet). `npm run build` compiles the TypeScript source to runnable JavaScript in the `dist/` folder. You should see no errors.
 
-The server reads `~/.canvas-teacher-mcp/config.json` on startup. Create this file before connecting to Claude:
+### 5. Get your Canvas API token
+
+1. Log in to your institution's Canvas (e.g., `https://yourschool.instructure.com`)
+2. Click your profile picture → **Account** → **Settings**
+3. Scroll down to **Approved Integrations** and click **New Access Token**
+4. Give it a name (e.g., "Claude MCP") and set an expiration date
+5. Click **Generate Token** and copy the token — you won't see it again
+
+### 6. Create the configuration file
+
+Create the directory and file the server reads on startup. In Terminal:
+
+**macOS/Linux:**
+```bash
+mkdir -p ~/.canvas-teacher-mcp
+```
+
+Then open a text editor and create the file `~/.canvas-teacher-mcp/config.json` with this content (substitute your real values):
 
 ```json
 {
   "canvas": {
-    "instanceUrl": "https://your-institution.instructure.com",
-    "apiToken": "YOUR_CANVAS_API_TOKEN"
+    "instanceUrl": "https://yourschool.instructure.com",
+    "apiToken": "YOUR_CANVAS_API_TOKEN_HERE"
   },
   "program": {
     "activeCourseId": null,
@@ -54,28 +102,110 @@ The server reads `~/.canvas-teacher-mcp/config.json` on startup. Create this fil
 }
 ```
 
+Replace `yourschool.instructure.com` with your school's Canvas domain and `YOUR_CANVAS_API_TOKEN_HERE` with the token from step 5. Update `courseCodes` to your actual course codes (or leave the array empty to see all your courses).
+
 **`canvas.instanceUrl`** and **`canvas.apiToken`** are required — the server exits immediately with a clear error if either is missing.
 
-**`program.courseCodes`** is optional but recommended. When set, `list_courses` filters to only show courses whose code contains one of these strings (e.g., `"ENG101"` matches `"ENG101-003"`). Set it once to your program's course codes so the tool list stays tidy. Leave it empty to show all your teacher-enrolled courses.
+**`program.courseCodes`** filters `list_courses` to show only matching courses (e.g., `"ENG101"` matches `"ENG101-003"`). Leave it empty (`[]`) to see all teacher-enrolled courses.
 
 **`program.activeCourseId`** and **`program.courseCache`** are managed automatically by `set_active_course` — do not hand-edit them.
 
-## Claude Desktop integration
+### 7. Connect to Claude Desktop
 
-Add to your Claude Desktop MCP config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+1. Download and install [Claude Desktop](https://claude.ai/download) if you haven't already
+2. Open Finder (macOS) and press ⌘+Shift+G, then paste:
+   `~/Library/Application Support/Claude/`
+3. Open (or create) the file `claude_desktop_config.json` in a text editor
+4. Add the following, replacing `/path/to/canvas-teacher-mcp` with the actual path to the folder you cloned in step 3 (e.g., `/Users/yourname/canvas-teacher-mcp`):
 
 ```json
 {
   "mcpServers": {
     "canvas-teacher-mcp": {
       "command": "node",
-      "args": ["/path/to/canvas-teacher-mcp/dist/index.js"]
+      "args": ["--secure-heap=65536", "/path/to/canvas-teacher-mcp/dist/index.js"]
     }
   }
 }
 ```
 
-Restart Claude Desktop. The server will appear under Connected MCP Servers.
+5. Save the file and **restart Claude Desktop** (quit completely and reopen)
+6. Look for a hammer icon (🔨) in the Claude Desktop chat window — this confirms MCP tools are connected. Click it to see the tool list.
+
+If Claude Desktop was already open with other MCP servers configured, merge the `"canvas-teacher-mcp"` entry into your existing `"mcpServers"` object rather than replacing it.
+
+### 8. Start using it
+
+In a Claude Desktop chat, try:
+
+> "List my Canvas courses"
+
+Claude will call `list_courses` and show your courses. Then set the active course:
+
+> "Switch to my ENG101 course"
+
+---
+
+## Configuration reference
+
+The server reads `~/.canvas-teacher-mcp/config.json` on startup. See the full schema in [PLANNING.md](PLANNING.md#3-configuration-schema). The key fields are listed in step 6 above.
+
+## Other AI assistants
+
+The server works with any MCP-compatible AI client, not just Claude Desktop. The `~/.canvas-teacher-mcp/config.json` file is shared across all clients — you only configure it once.
+
+### Claude Code (the `claude` CLI)
+
+Add the server to your user-level MCP config with a single command:
+
+```bash
+claude mcp add canvas-teacher-mcp -- node --secure-heap=65536 /path/to/canvas-teacher-mcp/dist/index.js
+```
+
+Replace `/path/to/canvas-teacher-mcp` with the actual folder path from step 3. This writes to `~/.claude.json` (user scope) and makes the server available in all Claude Code sessions.
+
+To add it to a specific project only (so it isn't available globally), run the command from inside that project's folder and add `--scope project`:
+
+```bash
+claude mcp add --scope project canvas-teacher-mcp -- node --secure-heap=65536 /path/to/canvas-teacher-mcp/dist/index.js
+```
+
+Verify the server was added:
+
+```bash
+claude mcp list
+```
+
+### Gemini CLI (Google's `gemini` CLI)
+
+Edit `~/.gemini/settings.json` (create it if it doesn't exist):
+
+```json
+{
+  "mcpServers": {
+    "canvas-teacher-mcp": {
+      "command": "node",
+      "args": ["--secure-heap=65536", "/path/to/canvas-teacher-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+If you have other servers already configured, add the `"canvas-teacher-mcp"` entry inside the existing `"mcpServers"` object. Restart Gemini CLI after saving.
+
+To limit the server to a single project instead of all sessions, place the same JSON in `.gemini/settings.json` inside that project's folder.
+
+### Codex CLI (OpenAI's `codex` CLI)
+
+Edit `~/.codex/config.toml` (create it if it doesn't exist):
+
+```toml
+[mcp_servers.canvas-teacher-mcp]
+command = "node"
+args = ["--secure-heap=65536", "/path/to/canvas-teacher-mcp/dist/index.js"]
+```
+
+To limit it to a single project, place the same TOML in `.codex/config.toml` inside that project's folder (the project must be trusted).
 
 ## Tools
 
@@ -89,16 +219,20 @@ Restart Claude Desktop. The server will appear under Connected MCP Servers.
 
 ### Reporting
 
+Student names and Canvas IDs in reporting tool responses are automatically replaced with session tokens (`[STUDENT_001]`, `[STUDENT_002]`, …) before they reach the AI. See [Privacy](#privacy--ferpa) below.
+
 | Tool | Description |
 |------|-------------|
 | `list_modules` | List all modules in the active course. |
 | `get_module_summary` | Full structure of a module: item types, titles, points, due dates. |
 | `list_assignment_groups` | List all assignment groups in the active course. |
-| `get_class_grade_summary` | Every student's current score, missing count, late count. Supports `sort_by: "engagement"` to surface most-at-risk students first. |
-| `get_assignment_breakdown` | Per-student submission status and score for a single assignment. |
-| `get_student_report` | Deep report for a single student — all assignments with scores and missing/late flags. |
-| `get_missing_assignments` | All missing assignments grouped by student. |
-| `get_late_assignments` | All late assignments grouped by student. |
+| `get_class_grade_summary` | Every student's current score, missing count, late count. Student names replaced with session tokens. Supports `sort_by: "engagement"` to surface most-at-risk students first. |
+| `get_assignment_breakdown` | Per-student submission status and score for a single assignment. Student names replaced with session tokens. |
+| `get_student_report` | Deep report for a single student — all assignments with scores and missing/late flags. Input: `student_token` (e.g. `"[STUDENT_003]"`) from a prior reporting call. |
+| `get_missing_assignments` | All missing assignments grouped by student. Student names replaced with session tokens. |
+| `get_late_assignments` | All late assignments grouped by student. Student names replaced with session tokens. |
+| `resolve_student` | Look up the real name and Canvas ID for a session token. Response is shown to you only — not passed to the AI. |
+| `list_blinded_students` | List all session tokens registered so far in the current session. No names included. |
 
 ### Content creation (low-level)
 
@@ -147,6 +281,25 @@ Restart Claude Desktop. The server will appear under Connected MCP Servers.
 |------|-------------|
 | `preview_course_reset` | Dry run — list all content that would be deleted by `reset_course`. Does not modify anything. |
 | `reset_course` | Permanently delete all content from a course. Requires `confirmation_text` to exactly match the course name. See safety notes below. |
+
+---
+
+## Privacy / FERPA
+
+Student names and Canvas numeric IDs are FERPA-protected PII. When this server is used with Claude Desktop (cloud-hosted AI), every tool response passes through Anthropic's infrastructure. To prevent student data from leaving your machine, all reporting tools automatically replace student identity information with opaque session tokens before the response reaches the AI:
+
+- `[STUDENT_001]`, `[STUDENT_002]`, … are assigned in the order students are first seen, and reset on every server restart.
+- The AI reasons about tokens only — it never sees real names or Canvas IDs.
+- A human-readable lookup table (`[STUDENT_001] → Jane Smith`) is shown **to you** in the Claude Desktop UI alongside the AI's response, so you always know who's who without needing to ask.
+- To explicitly look up a token, call `resolve_student` — the result is shown to you only, not added to the AI's context.
+- Blinding is always on and cannot be disabled.
+
+The session key used to protect the in-memory token map is:
+- Freshly generated at startup (never stored to disk)
+- Pinned in RAM via `mlock` where the OS permits (prevents swap-file exposure)
+- Zeroed on process exit (`SIGINT`, `SIGTERM`, `SIGHUP`)
+
+The `--secure-heap=65536` flag in the Claude Desktop config allocates a locked memory region for cryptographic operation intermediates. Include it in your config as shown in the [setup guide](#7-connect-to-claude-desktop).
 
 ---
 
@@ -227,17 +380,19 @@ src/
 ├── config/
 │   ├── schema.ts         # Config types and DEFAULT_CONFIG
 │   └── manager.ts        # Read/write ~/.canvas-teacher-mcp/config.json
+├── security/
+│   └── secure-store.ts   # AES-256-GCM in-memory PII store (session tokens, mlock)
 ├── templates/
 │   └── index.ts          # Module template renderer (Handlebars)
 └── tools/
     ├── context.ts        # list_courses, set_active_course, get_active_course
     ├── content.ts        # Low-level CRUD tools
     ├── modules.ts        # High-level module creation tools
-    ├── reporting.ts      # Grade & submission reporting tools
+    ├── reporting.ts      # Grade & submission reporting tools (with PII blinding)
     └── reset.ts          # preview_course_reset, reset_course
 tests/
-├── unit/                 # Vitest + msw, no credentials required (148 tests)
-└── integration/          # Real Canvas API, requires .env.test
+├── unit/                 # Vitest + msw, no credentials required (183 tests)
+└── integration/          # Real Canvas API, requires .env.test (72 tests)
 ```
 
 ## Roadmap
@@ -251,4 +406,4 @@ tests/
 | 5 — Destructive ops | Complete | `preview_course_reset`, `reset_course` with confirmation gate |
 | 5b — Complete reset | Complete | Full content sweep: discussions, announcements, files, rubrics, assignment groups, syllabus |
 | 5b+ — Creation tools | Complete | `create_discussion`, `create_announcement`, `upload_file`, `create_rubric`, `associate_rubric`, `update_syllabus`; rubric zombie recovery in `reset_course` |
-| 6 — FERPA PII blinding | Planned | Opt-in blinding layer for student names/IDs in reporting tools |
+| 6 — FERPA PII blinding | Complete | Always-on blinding of student names/IDs in all reporting tools; session tokens; `resolve_student`, `list_blinded_students` |
