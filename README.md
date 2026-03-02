@@ -4,6 +4,34 @@ A teacher-facing [Model Context Protocol (MCP)](https://modelcontextprotocol.io)
 
 > **Note:** In its current state, this server is tailored to the workflows and course structure of a particular school and program. The underlying Canvas API integration is general-purpose, but some defaults, templates, and naming conventions reflect that specific instructional context. Generalizing these is planned.
 
+## Table of Contents
+
+- [What it does](#what-it-does)
+- [Requirements](#requirements)
+- [Step-by-step setup (first time)](#step-by-step-setup-first-time)
+  1. [Install Node.js](#1-install-nodejs)
+  2. [Install Git](#2-install-git)
+  3. [Download the project](#3-download-the-project)
+  4. [Install dependencies and build](#4-install-dependencies-and-build)
+  5. [Get your Canvas API token](#5-get-your-canvas-api-token)
+  6. [Create the configuration file](#6-create-the-configuration-file)
+  7. [Connect to your AI Assistant](#7-connect-to-your-ai-assistant)
+  8. [Start using it](#8-start-using-it)
+- [Configuration reference](#configuration-reference)
+- [Platform-Specific Setup](#platform-specific-setup)
+  - [Claude Desktop](#claude-desktop)
+  - [Claude Code](#claude-code-anthropics-claude-cli)
+  - [Gemini CLI](#gemini-cli-googles-gemini-cli)
+  - [Codex CLI](#codex-cli-openais-codex-cli)
+- [Tools](#tools)
+- [Privacy / FERPA](#privacy--ferpa)
+- [Canvas API notes](#canvas-api-notes)
+- [Development](#development)
+  - [Running tests](#running-tests)
+  - [Setting up integration tests](#setting-up-integration-tests)
+  - [Build](#build)
+  - [Project structure](#project-structure)
+
 ## What it does
 
 Connect this server to an AI assistant (like Claude Desktop) and ask it to:
