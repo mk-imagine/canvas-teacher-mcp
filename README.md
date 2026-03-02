@@ -2,7 +2,7 @@
 
 A teacher-facing [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that wraps the Canvas LMS REST API. Designed for an instructor who wants to use an AI assistant (e.g., Claude) to create and manage course content across multiple Canvas courses.
 
-**Security & Privacy:** When installed correctly, this MCP server automatically blinds Personally Identifiable Information (PII) from the AI assistant and provides robust security for your data in compliance with FERPA and institutional policies (including UC/CSU). See [FERPA.md](docs/FERPA.md) and [SECURITY.md](docs/SECURITY.md) for details.
+**Security & Privacy:** When installed correctly (following the [step-by-step setup](#step-by-step-setup-first-time)), this MCP server automatically blinds Personally Identifiable Information (PII) from the AI assistant and provides robust security for your data in compliance with FERPA and institutional policies (including UC/CSU). See [FERPA.md](docs/FERPA.md) and [SECURITY.md](docs/SECURITY.md) for details.
 
 > **Note:** In its current state, this server is tailored to the workflows and course structure of a particular school and program. The underlying Canvas API integration is general-purpose, but some defaults, templates, and naming conventions reflect that specific instructional context. Generalizing these is planned.
 
