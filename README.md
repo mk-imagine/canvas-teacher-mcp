@@ -211,6 +211,8 @@ To limit it to a single project, place the same TOML in `.codex/config.toml` ins
 
 ## Tools
 
+18 tools total. All tools accept an optional `course_id` to override the active course.
+
 ### Course context
 
 | Tool | Description |
@@ -225,93 +227,51 @@ Student names and Canvas IDs in reporting tool responses are automatically repla
 
 | Tool | Description |
 |------|-------------|
-| `list_modules` | List all modules in the active course. |
-| `get_module_summary` | Full structure of a module: item types, titles, points, due dates. |
-| `list_assignment_groups` | List all assignment groups in the active course. |
-| `get_class_grade_summary` | Every student's current score, missing count, late count. Student names replaced with session tokens. Supports `sort_by: "engagement"` to surface most-at-risk students first. |
-| `get_assignment_breakdown` | Per-student submission status and score for a single assignment. Student names replaced with session tokens. |
-| `get_student_report` | Deep report for a single student — all assignments with scores and missing/late flags. Input: `student_token` (e.g. `"[STUDENT_003]"`) from a prior reporting call. |
-| `get_missing_assignments` | All missing assignments grouped by student. Student names replaced with session tokens. |
-| `get_late_assignments` | All late assignments grouped by student. Student names replaced with session tokens. |
-| `resolve_student` | Look up the real name and Canvas ID for a session token. Response is shown to you only — not passed to the AI. |
-| `list_blinded_students` | List all session tokens registered so far in the current session. No names included. |
- 
-### Content creation (low-level)
+| `get_module_summary` | Full structure of a module: item types, titles, points, due dates. Accepts `module_id` or `module_name` (partial match). |
+| `get_grades` | Grade data scoped by `scope`: `"class"` (every student's score + missing/late counts, supports `sort_by`), `"assignment"` (per-student breakdown for one assignment), or `"student"` (all assignments for one student via `student_token`). Student names replaced with session tokens. |
+| `get_submission_status` | Missing or late assignments by student. `type: "missing"` supports an optional `since_date` filter. Student names replaced with session tokens. |
+| `student_pii` | PII lookup. `action: "resolve"` reveals the real name and Canvas ID for a session token (shown to you only). `action: "list"` returns all tokens registered in the current session. |
+
+### Create & list
 
 | Tool | Description |
 |------|-------------|
-| `create_assignment` | Create a graded assignment. Supports Handlebars description templates for Colab notebook URLs. |
-| `update_assignment` | Update assignment settings. |
-| `delete_assignment` | Permanently delete an assignment. Pre-deletes any associated rubric first. |
-| `create_quiz` | Create a Classic Quiz or graded survey. Supports exit card question templates. |
-| `update_quiz` | Update quiz settings. |
-| `delete_quiz` | Permanently delete a Classic Quiz. |
-| `create_page` | Create a wiki page. |
-| `delete_page` | Delete a wiki page. Refuses to delete the front page without explicit reassignment. |
-| `create_discussion` | Create a discussion topic. |
-| `create_announcement` | Create an announcement (auto-published). |
-| `delete_discussion` | Permanently delete a discussion topic. |
-| `delete_announcement` | Permanently delete an announcement. |
+| `create_item` | Create a course item. `type` is a discriminated union: `page`, `assignment`, `quiz`, `discussion`, `announcement`, `module`, or `module_item`. Pass `dry_run: true` to preview the resolved inputs without calling Canvas. |
+| `list_items` | List course items by type: `modules`, `assignments`, `quizzes`, `pages`, `discussions`, `announcements`, `rubrics`, `assignment_groups`, or `module_items` (requires `module_name`). |
+
+### Find, update & delete
+
+| Tool | Description |
+|------|-------------|
+| `find_item` | Find any course item by partial name and return its full details. Types: `page` (with body), `assignment` (with description), `quiz` (with questions), `module`, `module_item`, `discussion`, `announcement`, `syllabus`. Returns first case-insensitive partial match with a warning if multiple items matched. |
+| `update_item` | Find a course item by name then update it. Types: `page`, `assignment`, `quiz`, `module`, `module_item`, `syllabus`. Provide only the fields to change. |
+| `delete_item` | Find a course item by name then delete or remove it. Types: `page`, `assignment`, `quiz`, `module`, `module_item`, `discussion`, `announcement`. Deleting a `module_item` only removes it from the module — underlying content is not deleted. |
+
+### Files & rubrics
+
+| Tool | Description |
+|------|-------------|
 | `upload_file` | Upload a local file to the course Files section via Canvas's 3-step upload protocol. |
 | `delete_file` | Permanently delete a file. Irreversible — no recycle bin via API. |
 | `create_rubric` | Create a rubric and associate it with an assignment. See rubric notes below. |
-| `associate_rubric` | Associate an existing rubric with a different assignment. |
-| `update_syllabus` | Set or replace the course syllabus body. |
-| `clear_syllabus` | Clear the syllabus body (set to empty). |
-
-### Module items (low-level)
-
-| Tool | Description |
-|------|-------------|
-| `add_module_item` | Add a single item to an existing module. |
-| `update_module_item` | Update a module item's position, title, or completion requirement. |
-| `remove_module_item` | Remove an item from a module (does not delete the underlying content). |
-| `update_module` | Update module settings (name, lock date, prerequisites, published state). |
-| `delete_module` | Delete a module and its items. Does not delete underlying assignments/pages/quizzes. |
-
-### Content retrieval
-
-| Tool | Description |
-|------|-------------|
-| `get_page` | Get a page's full content by URL slug. |
-| `list_assignments` | List all assignments in the active course. |
-| `get_assignment` | Get a single assignment by ID, including description HTML. |
-| `list_quizzes` | List all quizzes in the active course. |
-| `get_quiz` | Get a single quiz by ID, including questions. |
-| `list_discussions` | List all discussion topics. |
-| `list_announcements` | List all announcements. |
-| `list_rubrics` | List all rubrics in the course. |
-| `get_syllabus` | Get the course syllabus body HTML. |
-
-### Smart find & mutate
-
-| Tool | Description |
-|------|-------------|
-| `find_item` | Find any course item by partial name and return its full details. Supports: page (with body), assignment (with description), quiz (with questions), module, module_item, discussion, announcement. Returns first case-insensitive partial match with a warning if multiple items matched. |
-| `update_item` | Find a course item by name then update it. Supports: page, assignment, quiz, module, module_item. Provide only the fields to change. |
-| `delete_item` | Find a course item by name then delete or remove it. Supports: page, assignment, quiz, module, module_item, discussion, announcement. Deleting a module_item only removes it from the module — underlying content is not deleted. |
-
-### Smart search (Currently in BETA on Canvas)
-
-| Tool | Description |
-|------|-------------|
-| `search_course` | Search course content using Canvas Smart Search (AI-powered semantic search). Returns results with distance scores — lower = closer match. Supports content type filtering, distance threshold, result limit, and optional body inclusion. Requires Canvas Smart Search beta to be enabled on your instance. |
-| `set_smart_search_threshold` | Set the default distance threshold used by `search_course`. Lower values are stricter (e.g. 0.2); higher values are more permissive (e.g. 0.8). Default: 0.5. Persisted to the config file. |
 
 ### Module creation (high-level)
 
 | Tool | Description |
 |------|-------------|
-| `create_lesson_module` | Create a full lesson module from a named template in one call. Creates module, all content items, and completion requirements. |
-| `create_solution_module` | Create a solution module linked to a lesson module. Sets unlock date and prerequisite. |
-| `clone_module` | Copy a module from any course into the active course, with optional week number substitution. |
+| `build_module` | Build a module from a `template`: `"lesson"` (full week module from a named template with assignments, pages, and exit card), `"solution"` (solution module linked to a lesson module), or `"clone"` (copy a module from any course with optional week number substitution). |
 
 ### Destructive operations
 
 | Tool | Description |
 |------|-------------|
-| `preview_course_reset` | Dry run — list all content that would be deleted by `reset_course`. Does not modify anything. |
-| `reset_course` | Permanently delete all content from a course. Requires `confirmation_text` to exactly match the course name. See safety notes below. |
+| `reset_course` | Preview or execute a full course content reset. Pass `dry_run: true` to list what would be deleted and receive a `confirmation_token`. Pass the token back (provided by the user, not auto-supplied) to execute. Alternatively, pass `confirmation_text` matching the exact course name. See safety notes below. |
+
+### Smart search (Canvas beta feature)
+
+| Tool | Description |
+|------|-------------|
+| `search_course` | Search course content using Canvas Smart Search (AI-powered semantic search). Returns results with distance scores — lower = closer match. Supports content type filtering, distance threshold, result limit, and optional body inclusion. Pass `save_threshold: true` to persist the threshold to config as the new default. Requires Canvas Smart Search beta to be enabled on your instance. |
 
 ---
 
@@ -322,7 +282,7 @@ Student names and Canvas numeric IDs are FERPA-protected PII. When this server i
 - `[STUDENT_001]`, `[STUDENT_002]`, … are assigned in the order students are first seen, and reset on every server restart.
 - The AI reasons about tokens only — it never sees real names or Canvas IDs.
 - A human-readable lookup table (`[STUDENT_001] → Jane Smith`) is shown **to you** in the Claude Desktop UI alongside the AI's response, so you always know who's who without needing to ask.
-- To explicitly look up a token, call `resolve_student` — the result is shown to you only, not added to the AI's context.
+- To explicitly look up a token, call `student_pii(action='resolve', student_token='[STUDENT_001]')` — the result is shown to you only, not added to the AI's context.
 - Blinding is always on and cannot be disabled.
 
 The session key used to protect the in-memory token map is:
@@ -352,11 +312,17 @@ During `reset_course`, the rubric cleanup step (step 8) handles any pre-existing
 
 ### `reset_course` safety protocol
 
-1. Always call `preview_course_reset` first and show the output to the user.
-2. The tool requires `confirmation_text` to exactly match the Canvas course name (case-sensitive).
-3. Enrollments, course settings, and navigation tabs are never touched.
-4. The front page is automatically unset before page deletion.
-5. File deletion is irreversible — the preview shows file counts explicitly.
+**Step 1 — Preview:** Call `reset_course(dry_run=true)`. No confirmation required. Returns counts of what would be deleted and a short-lived `confirmation_token`. Show the preview to the user.
+
+**Step 2 — Execute:** Call `reset_course(confirmation_token='TOKEN')` (`dry_run` defaults to `false`). The token must be provided by the user — do not auto-supply it. Tokens expire after 5 minutes.
+
+**Alternative to step 2:** The user may instead provide `confirmation_text` exactly matching the Canvas course name (case-sensitive), skipping the token flow entirely.
+
+**Always preserved:** Enrollments, course settings, and navigation tabs are never touched.
+
+**Other notes:**
+- The front page is automatically unset before page deletion.
+- File deletion is irreversible — the preview shows file counts explicitly.
 
 ---
 
@@ -418,13 +384,13 @@ src/
 │   └── index.ts          # Module template renderer (Handlebars)
 └── tools/
     ├── context.ts        # list_courses, set_active_course, get_active_course
-    ├── content.ts        # Low-level CRUD tools
-    ├── modules.ts        # High-level module creation tools
-    ├── reporting.ts      # Grade & submission reporting tools (with PII blinding)
-    ├── reset.ts          # preview_course_reset, reset_course
-    └── find.ts           # Smart find/mutate + smart search tools
+    ├── content.ts        # upload_file, create_rubric, delete_file
+    ├── modules.ts        # build_module (lesson / solution / clone templates)
+    ├── reporting.ts      # get_module_summary, get_grades, get_submission_status, student_pii
+    ├── reset.ts          # reset_course (dry_run + confirmation gate)
+    └── find.ts           # create_item, list_items, find_item, update_item, delete_item, search_course
 tests/
-├── unit/                 # Vitest + msw, no credentials required (240 tests)
+├── unit/                 # Vitest + msw, no credentials required (161 tests)
 └── integration/          # Real Canvas API, requires .env.test (88 tests)
 ```
 
@@ -443,3 +409,4 @@ tests/
 | 7 — Content retrieval | Complete | `get_page`, `list_assignments`, `get_assignment`, `list_quizzes`, `get_quiz`, `list_discussions`, `list_announcements`, `list_rubrics`, `get_syllabus` |
 | 8 — Smart find & mutate | Complete | `find_item`, `update_item`, `delete_item` (name-based lookup for all content types); `get_module_summary` extended with `module_name` param |
 | 9 — Canvas Smart Search | Complete | `search_course` (semantic search via Canvas beta API, configurable distance threshold), `set_smart_search_threshold`, `config.smartSearch.distanceThreshold` |
+| 10 — Tool interface refactor | Complete | Consolidated ~58 tools into 18 via discriminated unions: `create_item` (7 types), `list_items` (9 types), `build_module` (3 templates), `get_grades` (3 scopes), `get_submission_status` (2 types), `student_pii` (2 actions); merged `preview_course_reset` into `reset_course(dry_run)`; merged syllabus into `find_item`/`update_item`; merged `set_smart_search_threshold` into `search_course(save_threshold)` |

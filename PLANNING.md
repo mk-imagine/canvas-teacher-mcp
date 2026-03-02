@@ -1908,6 +1908,32 @@ Adds AI-powered semantic search via the Canvas Smart Search beta API. Includes c
 
 **Exit criterion:** `search_course` returns threshold-filtered results with distance scores. `set_smart_search_threshold` persists to config file. Tool returns a descriptive error (not a thrown exception) if Smart Search is unavailable on the Canvas instance. All Phase 9 tests pass.
 
+### Phase 10 — Tool Interface Refactor - COMPLETE
+
+**Prerequisites:** Phases 1–9 complete.
+
+**Motivation:** With ~58 registered MCP tools, LLM tool selection degrades — research shows performance drops noticeably above ~20–40 tools. LLMs navigate discriminated union schemas well once a tool is selected; the bottleneck is selection. Consolidating into well-named discriminated unions reduces selection complexity without adding navigational complexity.
+
+**Goal:** 18 tools by merging related operations into discriminated union schemas.
+
+**Changes:**
+- `create_item` (find.ts): 7-type discriminated union (page, assignment, quiz, discussion, announcement, module, module_item) + `dry_run`
+- `list_items` (find.ts): 9-type discriminated union (modules, assignments, quizzes, pages, discussions, announcements, rubrics, assignment_groups, module_items)
+- `build_module` (modules.ts): 3-template discriminated union (lesson, solution, clone) — replaces `create_lesson_module`, `create_solution_module`, `clone_module`
+- `get_grades` (reporting.ts): 3-scope discriminated union (class, assignment, student) — replaces `get_class_grade_summary`, `get_assignment_breakdown`, `get_student_report`
+- `get_submission_status` (reporting.ts): type enum (missing, late) — replaces `get_missing_assignments`, `get_late_assignments`
+- `student_pii` (reporting.ts): 2-action discriminated union (resolve, list) — replaces `resolve_student`, `list_blinded_students`
+- `reset_course` (reset.ts): absorbed `preview_course_reset` via `dry_run: true`; added `confirmation_token` flow alongside existing `confirmation_text`
+- `find_item` / `update_item` (find.ts): added `type='syllabus'` variant — replaces `get_syllabus`, `update_syllabus`, `clear_syllabus`
+- `search_course` (find.ts): added `save_threshold` param — replaces `set_smart_search_threshold`
+- `content.ts`: removed ~32 tool registrations; kept `upload_file`, `create_rubric`, `delete_file`
+- `reporting.ts`: removed 9 old tool registrations; added 3 new consolidated tools
+- All integration tests updated to use the new tool names
+
+**Result:** 18 tools total (down from ~58). 161 unit tests passing. Build clean.
+
+**Exit criterion:** All 18 tools registered and functional. Unit tests pass (161). Build clean. Integration tests pass (88).
+
 ---
 
 ## 9. Error Handling Philosophy
