@@ -3,8 +3,5 @@ dist/
 .env.test
 *.js.map
 
-# VS Code
-.history/
-
-# PLanning Docs
+# Obsolete PLanning Docs
 PLANNING.md
