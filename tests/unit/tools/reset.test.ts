@@ -112,8 +112,8 @@ function getText(result: Awaited<ReturnType<Client['callTool']>>) {
   return (result.content as Array<{ type: string; text: string }>)[0].text
 }
 
-/** Register minimal GET handlers and call preview_course_reset to obtain a valid token. */
-async function getTokenFromPreview(
+/** Register minimal GET handlers and call reset_course(dry_run=true) to obtain a valid token. */
+async function getTokenFromDryRun(
   mcpClient: Client,
   courseOverride?: object
 ): Promise<string> {
@@ -131,7 +131,7 @@ async function getTokenFromPreview(
     http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/assignment_groups`, () => HttpResponse.json([])),
   )
   const data = parseResult(
-    await mcpClient.callTool({ name: 'preview_course_reset', arguments: {} })
+    await mcpClient.callTool({ name: 'reset_course', arguments: { dry_run: true } })
   )
   return data.confirmation_token as string
 }
@@ -260,9 +260,9 @@ function registerResetHandlers(trackers: {
   )
 }
 
-// ─── preview_course_reset ─────────────────────────────────────────────────────
+// ─── reset_course dry_run=true (preview) ──────────────────────────────────────
 
-describe('preview_course_reset', () => {
+describe('reset_course — dry_run=true', () => {
   it('returns counts of all content without modifying anything', async () => {
     registerPreviewHandlers()
     const configPath = makeTmpConfigPath()
@@ -270,7 +270,7 @@ describe('preview_course_reset', () => {
     const { mcpClient } = await makeTestClient(configPath)
 
     const data = parseResult(
-      await mcpClient.callTool({ name: 'preview_course_reset', arguments: {} })
+      await mcpClient.callTool({ name: 'reset_course', arguments: { dry_run: true } })
     )
 
     expect(data.course.id).toBe(COURSE_ID)
@@ -295,7 +295,7 @@ describe('preview_course_reset', () => {
     const { mcpClient } = await makeTestClient(configPath)
 
     const data = parseResult(
-      await mcpClient.callTool({ name: 'preview_course_reset', arguments: {} })
+      await mcpClient.callTool({ name: 'reset_course', arguments: { dry_run: true } })
     )
 
     expect(typeof data.confirmation_token).toBe('string')
@@ -310,18 +310,17 @@ describe('preview_course_reset', () => {
     const { mcpClient } = await makeTestClient(configPath)
 
     const text = getText(
-      await mcpClient.callTool({ name: 'preview_course_reset', arguments: {} })
+      await mcpClient.callTool({ name: 'reset_course', arguments: { dry_run: true } })
     )
 
     expect(text).toContain('No active course')
   })
 })
 
-// ─── reset_course ─────────────────────────────────────────────────────
+// ─── reset_course — destructive ────────────────────────────────────────────────
 
-describe('reset_course', () => {
+describe('reset_course — with confirmation_token', () => {
   it('rejects invalid token without making any deletions', async () => {
-    // Token validation happens before any Canvas API calls — no mocks needed
     const configPath = makeTmpConfigPath()
     writeConfig(configPath)
     const { mcpClient } = await makeTestClient(configPath)
@@ -343,9 +342,8 @@ describe('reset_course', () => {
     writeConfig(configPath)
     const { mcpClient } = await makeTestClient(configPath)
 
-    const token = await getTokenFromPreview(mcpClient)
+    const token = await getTokenFromDryRun(mcpClient)
 
-    // Advance time past the 5-minute expiry
     vi.useFakeTimers()
     vi.advanceTimersByTime(6 * 60 * 1000)
 
@@ -361,7 +359,7 @@ describe('reset_course', () => {
     expect(text).toContain('expired')
   })
 
-  it('deletes all content when a valid token from preview is supplied', async () => {
+  it('deletes all content when a valid token from dry_run is supplied', async () => {
     const trackers = {
       deletedModules: [] as number[],
       deletedAssignments: [] as number[],
@@ -379,7 +377,7 @@ describe('reset_course', () => {
     writeConfig(configPath)
     const { mcpClient } = await makeTestClient(configPath)
 
-    const token = await getTokenFromPreview(mcpClient)
+    const token = await getTokenFromDryRun(mcpClient)
 
     registerResetHandlers(trackers)
     const data = parseResult(
@@ -405,7 +403,6 @@ describe('reset_course', () => {
     expect(trackers.deletedDiscussions).toEqual([801, 802])
     expect(trackers.deletedPages).toEqual(['week-1-overview'])
     expect(trackers.deletedFiles).toEqual([901])
-    // Rubric 1001 deleted by deleteAssignment(501), rubric 1002 deleted by sweep
     expect(trackers.deletedRubrics).toEqual(expect.arrayContaining([1001, 1002]))
     expect(trackers.deletedAssignmentGroups).toEqual([100, 101])
     expect(trackers.syllabusCleared).toEqual([true])
@@ -416,9 +413,8 @@ describe('reset_course', () => {
     writeConfig(configPath)
     const { mcpClient } = await makeTestClient(configPath)
 
-    const token = await getTokenFromPreview(mcpClient)
+    const token = await getTokenFromDryRun(mcpClient)
 
-    // First use: consume the token (all lists empty → no-op reset)
     mswServer.use(
       http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}`, () => HttpResponse.json(MOCK_COURSE)),
       http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/modules`, () => HttpResponse.json([])),
@@ -433,7 +429,6 @@ describe('reset_course', () => {
     )
     await mcpClient.callTool({ name: 'reset_course', arguments: { confirmation_token: token } })
 
-    // Second use: same token should be rejected
     const text = getText(
       await mcpClient.callTool({ name: 'reset_course', arguments: { confirmation_token: token } })
     )
@@ -445,7 +440,7 @@ describe('reset_course', () => {
     writeConfig(configPath)
     const { mcpClient } = await makeTestClient(configPath)
 
-    const token = await getTokenFromPreview(mcpClient)
+    const token = await getTokenFromDryRun(mcpClient)
 
     mswServer.use(
       http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}`, () =>
@@ -494,7 +489,6 @@ describe('reset_course', () => {
       })
     )
 
-    // Should complete successfully despite the 404
     expect(data.deleted.discussions).toBe(1)
   })
 
@@ -503,7 +497,7 @@ describe('reset_course', () => {
     writeConfig(configPath)
     const { mcpClient } = await makeTestClient(configPath)
 
-    const token = await getTokenFromPreview(mcpClient)
+    const token = await getTokenFromDryRun(mcpClient)
 
     mswServer.use(
       http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}`, () =>
@@ -548,7 +542,6 @@ describe('reset_course', () => {
       })
     )
 
-    // Should complete successfully — the last group error is swallowed
     expect(data.deleted.assignment_groups).toBe(0)
     expect(data.deleted.syllabus_cleared).toBe(true)
   })
@@ -560,8 +553,7 @@ describe('reset_course', () => {
     writeConfig(configPath)
     const { mcpClient } = await makeTestClient(configPath)
 
-    // Token is keyed by courseId — course name doesn't affect token validity
-    const token = await getTokenFromPreview(mcpClient)
+    const token = await getTokenFromDryRun(mcpClient)
 
     mswServer.use(
       http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}`, () =>
@@ -596,11 +588,11 @@ describe('reset_course', () => {
     writeConfig(configPath)
     const { mcpClient } = await makeTestClient(configPath)
 
-    const token = await getTokenFromPreview(mcpClient)
+    const token = await getTokenFromDryRun(mcpClient)
 
     mswServer.use(
       http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}`, () =>
-        HttpResponse.json(MOCK_COURSE)  // COURSE_NAME = 'Test Sandbox Course'
+        HttpResponse.json(MOCK_COURSE)
       ),
       http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/modules`, () => HttpResponse.json([])),
       http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/assignments`, () => HttpResponse.json([])),
@@ -633,7 +625,7 @@ describe('reset_course', () => {
     writeConfig(configPath)
     const { mcpClient } = await makeTestClient(configPath)
 
-    const token = await getTokenFromPreview(mcpClient)
+    const token = await getTokenFromDryRun(mcpClient)
 
     mswServer.use(
       http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}`, () =>
@@ -700,5 +692,76 @@ describe('reset_course', () => {
     )
 
     expect(text).toContain('No active course')
+  })
+})
+
+// ─── reset_course — with confirmation_text ─────────────────────────────────────
+
+describe('reset_course — with confirmation_text', () => {
+  it('deletes all content when exact course name is provided', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath)
+    const { mcpClient } = await makeTestClient(configPath)
+
+    mswServer.use(
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}`, () =>
+        HttpResponse.json(MOCK_COURSE)
+      ),
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/modules`, () => HttpResponse.json([])),
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/assignments`, () => HttpResponse.json([])),
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/quizzes`, () => HttpResponse.json([])),
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/discussion_topics`, () => HttpResponse.json([])),
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/pages`, () => HttpResponse.json([])),
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/files`, () => HttpResponse.json([])),
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/rubrics`, () => HttpResponse.json([])),
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/assignment_groups`, () => HttpResponse.json([])),
+      http.put(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}`, () => HttpResponse.json(MOCK_COURSE)),
+    )
+
+    const data = parseResult(
+      await mcpClient.callTool({
+        name: 'reset_course',
+        arguments: { confirmation_text: COURSE_NAME },
+      })
+    )
+
+    expect(data.course.id).toBe(COURSE_ID)
+    expect(data.deleted.syllabus_cleared).toBe(true)
+  })
+
+  it('rejects wrong course name', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath)
+    const { mcpClient } = await makeTestClient(configPath)
+
+    mswServer.use(
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}`, () =>
+        HttpResponse.json(MOCK_COURSE)
+      ),
+    )
+
+    const text = getText(
+      await mcpClient.callTool({
+        name: 'reset_course',
+        arguments: { confirmation_text: 'Wrong Name' },
+      })
+    )
+
+    expect(text).toContain('does not match course name')
+  })
+
+  it('requires confirmation when neither token nor text provided', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath)
+    const { mcpClient } = await makeTestClient(configPath)
+
+    const text = getText(
+      await mcpClient.callTool({
+        name: 'reset_course',
+        arguments: {},
+      })
+    )
+
+    expect(text).toContain('confirmation_token')
   })
 })

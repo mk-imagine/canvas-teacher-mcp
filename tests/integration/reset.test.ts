@@ -11,6 +11,7 @@ import { CanvasClient } from '../../src/canvas/client.js'
 import { ConfigManager } from '../../src/config/manager.js'
 import { registerResetTools } from '../../src/tools/reset.js'
 import { registerContentTools } from '../../src/tools/content.js'
+import { registerFindTools } from '../../src/tools/find.js'
 
 const instanceUrl = process.env.CANVAS_INSTANCE_URL!
 const apiToken = process.env.CANVAS_API_TOKEN!
@@ -62,6 +63,7 @@ async function makeClient(configPath: string) {
   const mcpServer = new McpServer({ name: 'test', version: '0.0.1' })
   registerResetTools(mcpServer, canvasClient, configManager)
   registerContentTools(mcpServer, canvasClient, configManager)
+  registerFindTools(mcpServer, canvasClient, configManager)
 
   const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair()
   const mcpClient = new Client({ name: 'int-test-client', version: '0.0.1' })
@@ -92,15 +94,15 @@ beforeAll(async () => {
 
   // Create a discussion
   await mcpClient.callTool({
-    name: 'create_discussion',
-    arguments: { title: '[RESET TEST] Discussion', published: false },
+    name: 'create_item',
+    arguments: { type: 'discussion', title: '[RESET TEST] Discussion', published: false },
   })
   console.log('  Setup: created discussion')
 
   // Create an announcement
   await mcpClient.callTool({
-    name: 'create_announcement',
-    arguments: { title: '[RESET TEST] Announcement', message: '<p>Test</p>' },
+    name: 'create_item',
+    arguments: { type: 'announcement', title: '[RESET TEST] Announcement', message: '<p>Test</p>' },
   })
   console.log('  Setup: created announcement')
 
@@ -118,8 +120,8 @@ beforeAll(async () => {
   // Create an assignment to host the rubric (rubrics must be assignment-associated at creation)
   const rubricAssignment = parseResult(
     await mcpClient.callTool({
-      name: 'create_assignment',
-      arguments: { name: '[RESET TEST] Rubric Host Assignment', points_possible: 5, published: false },
+      name: 'create_item',
+      arguments: { type: 'assignment', name: '[RESET TEST] Rubric Host Assignment', points_possible: 5, published: false },
     })
   )
   console.log(`  Setup: created rubric host assignment id=${rubricAssignment.id}`)
@@ -146,22 +148,22 @@ beforeAll(async () => {
 
   // Set syllabus
   await mcpClient.callTool({
-    name: 'update_syllabus',
-    arguments: { body: '<h1>[RESET TEST] Syllabus</h1>' },
+    name: 'update_item',
+    arguments: { type: 'syllabus', body: '<h1>[RESET TEST] Syllabus</h1>' },
   })
   console.log('  Setup: set syllabus body')
 })
 
-// ─── preview_course_reset (read-only) ─────────────────────────────────────────
+// ─── reset_course dry_run (read-only) ─────────────────────────────────────────
 
-describe('preview_course_reset', () => {
+describe('reset_course dry_run', () => {
   it('returns course info, would_delete counts, and a confirmation token', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const { mcpClient } = await makeClient(configPath)
 
     const data = parseResult(
-      await mcpClient.callTool({ name: 'preview_course_reset', arguments: {} })
+      await mcpClient.callTool({ name: 'reset_course', arguments: { dry_run: true } })
     )
 
     expect(data.course.id).toBe(testCourseId)
@@ -192,7 +194,7 @@ describe('reset_course', () => {
     const { mcpClient } = await makeClient(configPath)
 
     const preview = parseResult(
-      await mcpClient.callTool({ name: 'preview_course_reset', arguments: {} })
+      await mcpClient.callTool({ name: 'reset_course', arguments: { dry_run: true } })
     )
 
     const text = getText(
@@ -206,7 +208,7 @@ describe('reset_course', () => {
 
     // Verify nothing was deleted — the valid token from preview is still usable
     const postPreview = parseResult(
-      await mcpClient.callTool({ name: 'preview_course_reset', arguments: {} })
+      await mcpClient.callTool({ name: 'reset_course', arguments: { dry_run: true } })
     )
     expect(postPreview.would_delete.assignments).toBe(preview.would_delete.assignments)
   })
@@ -228,7 +230,7 @@ describe('reset_course', () => {
     console.log(`  Created front page url="${frontPage.url}" — reset must unset it before deleting`)
 
     const preview = parseResult(
-      await mcpClient.callTool({ name: 'preview_course_reset', arguments: {} })
+      await mcpClient.callTool({ name: 'reset_course', arguments: { dry_run: true } })
     )
     const token = preview.confirmation_token as string
 
@@ -266,7 +268,7 @@ describe('reset_course', () => {
 
     // Course should now be empty (zombie rubrics that Canvas cannot delete are excluded)
     const postPreview = parseResult(
-      await mcpClient.callTool({ name: 'preview_course_reset', arguments: {} })
+      await mcpClient.callTool({ name: 'reset_course', arguments: { dry_run: true } })
     )
     expect(postPreview.would_delete.modules).toBe(0)
     expect(postPreview.would_delete.assignments).toBe(0)

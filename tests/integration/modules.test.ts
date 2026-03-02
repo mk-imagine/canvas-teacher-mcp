@@ -93,9 +93,9 @@ afterAll(async () => {
   }
 })
 
-// ─── create_lesson_module ─────────────────────────────────────────────────────
+// ─── build_module — lesson ────────────────────────────────────────────────────
 
-describe('Integration: create_lesson_module', () => {
+describe('Integration: build_module — lesson', () => {
   it('dry_run=true returns preview without creating Canvas objects', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -103,11 +103,12 @@ describe('Integration: create_lesson_module', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'create_lesson_module',
+        name: 'build_module',
         arguments: {
+          template: 'lesson',
           week: 99,
           title: '[MCP TEST] Dry Run Module',
-          template: 'later-standard',
+          lesson_template: 'later-standard',
           due_date: '2099-01-01T23:59:00Z',
           items: [
             { type: 'coding_assignment', title: 'Test Assignment', hours: 2 },
@@ -130,11 +131,12 @@ describe('Integration: create_lesson_module', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'create_lesson_module',
+        name: 'build_module',
         arguments: {
+          template: 'lesson',
           week: 99,
           title: '[MCP TEST] Later Standard Module',
-          template: 'later-standard',
+          lesson_template: 'later-standard',
           due_date: '2099-01-01T23:59:00Z',
           items: [
             { type: 'coding_assignment', title: 'Test Coding Assignment', hours: 2 },
@@ -156,9 +158,9 @@ describe('Integration: create_lesson_module', () => {
   })
 })
 
-// ─── create_solution_module ───────────────────────────────────────────────────
+// ─── build_module — solution ──────────────────────────────────────────────────
 
-describe('Integration: create_solution_module', () => {
+describe('Integration: build_module — solution', () => {
   it('creates solution module linked to lesson module', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -167,11 +169,12 @@ describe('Integration: create_solution_module', () => {
     // First create a lesson module to link to
     const lesson = parseResult(
       await mcpClient.callTool({
-        name: 'create_lesson_module',
+        name: 'build_module',
         arguments: {
+          template: 'lesson',
           week: 99,
           title: '[MCP TEST] Lesson For Solution',
-          template: 'later-standard',
+          lesson_template: 'later-standard',
           due_date: '2099-01-01T23:59:00Z',
           items: [],
         },
@@ -182,8 +185,9 @@ describe('Integration: create_solution_module', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'create_solution_module',
+        name: 'build_module',
         arguments: {
+          template: 'solution',
           lesson_module_id: lesson.module.id,
           unlock_at: '2099-01-08T00:00:00Z',
           title: '[MCP TEST] Solution Module',
@@ -204,9 +208,9 @@ describe('Integration: create_solution_module', () => {
   })
 })
 
-// ─── clone_module ─────────────────────────────────────────────────────────────
+// ─── build_module — clone ─────────────────────────────────────────────────────
 
-describe('Integration: clone_module', () => {
+describe('Integration: build_module — clone', () => {
   it.skipIf(!hasSeedModule)('clones seed module with week substitution', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -214,8 +218,9 @@ describe('Integration: clone_module', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'clone_module',
+        name: 'build_module',
         arguments: {
+          template: 'clone',
           source_module_id: seedModuleId,
           source_course_id: testCourseId,
           week: 99,

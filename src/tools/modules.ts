@@ -210,317 +210,309 @@ export function registerModuleTools(
   client: CanvasClient,
   configManager: ConfigManager
 ): void {
-  // ── create_lesson_module ──────────────────────────────────────────────────
+  // ── build_module ──────────────────────────────────────────────────────────
 
   server.registerTool(
-    'create_lesson_module',
+    'build_module',
     {
-      description: 'Create a full lesson module from a template. Orchestrates creation of the module, all sub-items (assignments, quizzes, pages, headers), and optionally publishes it.',
-      inputSchema: z.object({
-        week: z.number().int().positive()
-          .describe('Week number for title and naming'),
-        title: z.string()
-          .describe('Module title suffix, e.g. "Introduction to Python"'),
-        template: z.enum(['later-standard', 'later-review', 'earlier-standard', 'earlier-review'])
-          .describe('Template to use for structuring the module'),
-        due_date: z.string()
-          .describe('Due date for graded items, ISO 8601'),
-        items: z.array(itemSchema)
-          .describe('Content items to include in the module'),
-        assignment_group_id: z.number().int().positive().optional()
-          .describe('Assignment group ID for all assignments created'),
-        publish: z.boolean().optional()
-          .describe('Publish the module after creation. Default false.'),
-        dry_run: z.boolean().optional()
-          .describe('Preview items without creating anything in Canvas'),
-        course_id: z.number().int().positive().optional()
-          .describe('Canvas course ID. Defaults to active course.'),
-      }),
+      description: [
+        'Build a Canvas module using one of three templates:',
+        'template="lesson" — create a full lesson module from a template with assignments, quizzes, pages, and subheaders.',
+        'template="solution" — create a solution module that unlocks after the given lesson module with ExternalUrl items.',
+        'template="clone" — clone a module from one course into the active (or specified) destination course.',
+        'Use dry_run=true to preview without making Canvas API calls.',
+      ].join(' '),
+      inputSchema: z.discriminatedUnion('template', [
+        z.object({
+          template: z.literal('lesson'),
+          week: z.number().int().positive()
+            .describe('Week number for title and naming'),
+          title: z.string()
+            .describe('Module title suffix, e.g. "Introduction to Python"'),
+          lesson_template: z.enum(['later-standard', 'later-review', 'earlier-standard', 'earlier-review'])
+            .describe('Template to use for structuring the module'),
+          due_date: z.string()
+            .describe('Due date for graded items, ISO 8601'),
+          items: z.array(itemSchema)
+            .describe('Content items to include in the module'),
+          assignment_group_id: z.number().int().positive().optional()
+            .describe('Assignment group ID for all assignments created'),
+          publish: z.boolean().optional()
+            .describe('Publish the module after creation. Default false.'),
+          dry_run: z.boolean().optional()
+            .describe('Preview items without creating anything in Canvas'),
+          course_id: z.number().int().positive().optional()
+            .describe('Canvas course ID. Defaults to active course.'),
+        }),
+        z.object({
+          template: z.literal('solution'),
+          lesson_module_id: z.number().int().positive()
+            .describe('ID of the prerequisite lesson module'),
+          unlock_at: z.string()
+            .describe('ISO 8601 date when this module unlocks'),
+          title: z.string()
+            .describe('Module title'),
+          solutions: z.array(z.object({
+            title: z.string(),
+            url: z.string(),
+          })).describe('Solution links to add as module items'),
+          publish: z.boolean().optional()
+            .describe('Publish the module after creation. Default false.'),
+          dry_run: z.boolean().optional()
+            .describe('Preview without creating anything in Canvas'),
+          course_id: z.number().int().positive().optional()
+            .describe('Canvas course ID. Defaults to active course.'),
+        }),
+        z.object({
+          template: z.literal('clone'),
+          source_module_id: z.number().int().positive()
+            .describe('Canvas module ID to clone'),
+          source_course_id: z.number().int().positive()
+            .describe('Course ID containing the source module'),
+          week: z.number().int().positive().optional()
+            .describe('If provided, replace "Week N" in all titles with this week number'),
+          due_date: z.string().optional()
+            .describe('If provided, apply this due date to all graded items'),
+          dest_course_id: z.number().int().positive().optional()
+            .describe('Destination course ID. Defaults to active course.'),
+        }),
+      ]),
     },
     async (args) => {
       const config = configManager.read()
-      let courseId: number
-      try {
-        courseId = resolveCourseId(config, args.course_id)
-      } catch (err) {
-        return toolError((err as Error).message)
-      }
 
-      let renderables: RenderableItem[]
-      try {
-        renderables = renderTemplate(
-          args.template,
-          args.week,
-          args.items,
-          args.due_date,
-          config
+      if (args.template === 'lesson') {
+        let courseId: number
+        try {
+          courseId = resolveCourseId(config, args.course_id)
+        } catch (err) {
+          return toolError((err as Error).message)
+        }
+
+        let renderables: RenderableItem[]
+        try {
+          renderables = renderTemplate(
+            args.lesson_template,
+            args.week,
+            args.items,
+            args.due_date,
+            config
+          )
+        } catch (err) {
+          return toolError(String(err))
+        }
+
+        if (args.dry_run) {
+          return toJson({ items_preview: renderables, dry_run: true })
+        }
+
+        const moduleName = `Week ${args.week} | ${args.title}`
+        const mod = await createModule(client, courseId, { name: moduleName })
+
+        const result = await executeRenderables(
+          client, courseId, mod.id, renderables, config, args.assignment_group_id
         )
-      } catch (err) {
-        return toolError(String(err))
-      }
 
-      if (args.dry_run) {
-        return toJson({ items_preview: renderables, dry_run: true })
-      }
+        if (result.error) {
+          return toJson({
+            module: { id: mod.id, name: mod.name },
+            completed_before_failure: result.completed_before_failure,
+            error: result.error,
+          })
+        }
 
-      const moduleName = `Week ${args.week} | ${args.title}`
-      const mod = await createModule(client, courseId, { name: moduleName })
+        if (args.publish) {
+          await updateModule(client, courseId, mod.id, { published: true })
+        }
 
-      const result = await executeRenderables(
-        client, courseId, mod.id, renderables, config, args.assignment_group_id
-      )
-
-      if (result.error) {
         return toJson({
           module: { id: mod.id, name: mod.name },
-          completed_before_failure: result.completed_before_failure,
-          error: result.error,
+          items_created: result.items_created,
+          dry_run: false,
         })
       }
 
-      if (args.publish) {
-        await updateModule(client, courseId, mod.id, { published: true })
-      }
+      if (args.template === 'solution') {
+        let courseId: number
+        try {
+          courseId = resolveCourseId(config, args.course_id)
+        } catch (err) {
+          return toolError((err as Error).message)
+        }
 
-      return toJson({
-        module: { id: mod.id, name: mod.name },
-        items_created: result.items_created,
-        dry_run: false,
-      })
-    }
-  )
+        if (args.dry_run) {
+          return toJson({
+            dry_run: true,
+            module_preview: {
+              name: args.title,
+              prerequisite_module_ids: [args.lesson_module_id],
+              unlock_at: args.unlock_at,
+            },
+            items_preview: args.solutions.map(s => ({ kind: 'external_url', title: s.title, url: s.url })),
+          })
+        }
 
-  // ── create_solution_module ────────────────────────────────────────────────
+        try {
+          await getModule(client, courseId, args.lesson_module_id)
+        } catch {
+          return toolError(`Lesson module ${args.lesson_module_id} not found in course ${courseId}`)
+        }
 
-  server.registerTool(
-    'create_solution_module',
-    {
-      description: 'Create a solution module that unlocks after the given lesson module and contains ExternalUrl items linking to solution resources.',
-      inputSchema: z.object({
-        lesson_module_id: z.number().int().positive()
-          .describe('ID of the prerequisite lesson module'),
-        unlock_at: z.string()
-          .describe('ISO 8601 date when this module unlocks'),
-        title: z.string()
-          .describe('Module title'),
-        solutions: z.array(z.object({
-          title: z.string(),
-          url: z.string(),
-        })).describe('Solution links to add as module items'),
-        publish: z.boolean().optional()
-          .describe('Publish the module after creation. Default false.'),
-        dry_run: z.boolean().optional()
-          .describe('Preview without creating anything in Canvas'),
-        course_id: z.number().int().positive().optional()
-          .describe('Canvas course ID. Defaults to active course.'),
-      }),
-    },
-    async (args) => {
-      const config = configManager.read()
-      let courseId: number
-      try {
-        courseId = resolveCourseId(config, args.course_id)
-      } catch (err) {
-        return toolError((err as Error).message)
-      }
+        const mod = await createModule(client, courseId, {
+          name: args.title,
+          prerequisite_module_ids: [args.lesson_module_id],
+          unlock_at: args.unlock_at,
+        })
 
-      if (args.dry_run) {
+        const items_created: CreatedItem[] = []
+        for (const solution of args.solutions) {
+          const mi = await createModuleItem(client, courseId, mod.id, {
+            type: 'ExternalUrl',
+            title: solution.title,
+            external_url: solution.url,
+            new_tab: true,
+          })
+          items_created.push({ type: 'ExternalUrl', title: solution.title, module_item_id: mi.id })
+        }
+
+        if (args.publish) {
+          await updateModule(client, courseId, mod.id, { published: true })
+        }
+
         return toJson({
-          dry_run: true,
-          module_preview: {
-            name: args.title,
-            prerequisite_module_ids: [args.lesson_module_id],
-            unlock_at: args.unlock_at,
-          },
-          items_preview: args.solutions.map(s => ({ kind: 'external_url', title: s.title, url: s.url })),
+          module: { id: mod.id, name: mod.name, prerequisite_module_ids: mod.prerequisite_module_ids },
+          items_created,
         })
       }
 
-      // Verify the lesson module exists
-      try {
-        await getModule(client, courseId, args.lesson_module_id)
-      } catch {
-        return toolError(`Lesson module ${args.lesson_module_id} not found in course ${courseId}`)
-      }
+      if (args.template === 'clone') {
+        let destCourseId: number
+        try {
+          destCourseId = resolveCourseId(config, args.dest_course_id)
+        } catch (err) {
+          return toolError((err as Error).message)
+        }
 
-      const mod = await createModule(client, courseId, {
-        name: args.title,
-        prerequisite_module_ids: [args.lesson_module_id],
-        unlock_at: args.unlock_at,
-      })
+        let sourceModule: Awaited<ReturnType<typeof getModule>>
+        try {
+          sourceModule = await getModule(client, args.source_course_id, args.source_module_id)
+        } catch {
+          return toolError(`Source module ${args.source_module_id} not found in course ${args.source_course_id}`)
+        }
 
-      const items_created: CreatedItem[] = []
-      for (const solution of args.solutions) {
-        const mi = await createModuleItem(client, courseId, mod.id, {
-          type: 'ExternalUrl',
-          title: solution.title,
-          external_url: solution.url,
-          new_tab: true,
+        const sourceItems = await listModuleItems(client, args.source_course_id, args.source_module_id)
+
+        const detailFetches = sourceItems.map(async (item) => {
+          if (item.type === 'Assignment' && item.content_id) {
+            try {
+              return { item, detail: await getAssignment(client, args.source_course_id, item.content_id) }
+            } catch {
+              return { item, detail: null }
+            }
+          }
+          if (item.type === 'Quiz' && item.content_id) {
+            try {
+              const [quiz, questions] = await Promise.all([
+                getQuiz(client, args.source_course_id, item.content_id),
+                listQuizQuestions(client, args.source_course_id, item.content_id),
+              ])
+              return { item, detail: { ...quiz, questions } }
+            } catch {
+              return { item, detail: null }
+            }
+          }
+          if (item.type === 'Page' && item.page_url) {
+            try {
+              return { item, detail: await getPage(client, args.source_course_id, item.page_url) }
+            } catch {
+              return { item, detail: null }
+            }
+          }
+          return { item, detail: null }
         })
-        items_created.push({ type: 'ExternalUrl', title: solution.title, module_item_id: mi.id })
-      }
 
-      if (args.publish) {
-        await updateModule(client, courseId, mod.id, { published: true })
-      }
+        const fetched = await Promise.all(detailFetches)
 
-      return toJson({
-        module: { id: mod.id, name: mod.name, prerequisite_module_ids: mod.prerequisite_module_ids },
-        items_created,
-      })
-    }
-  )
+        const cloneWeek = args.week
+        function subWeek(text: string): string {
+          if (cloneWeek == null) return text
+          return text.replace(/Week\s+\d+/g, `Week ${cloneWeek}`)
+        }
 
-  // ── clone_module ──────────────────────────────────────────────────────────
+        const renderables: RenderableItem[] = []
+        for (const { item, detail } of fetched) {
+          if (item.type === 'SubHeader') {
+            renderables.push({ kind: 'subheader', title: subWeek(item.title) })
 
-  server.registerTool(
-    'clone_module',
-    {
-      description: 'Clone a module from one course into the active (or specified) destination course. Optionally renumber the week and update due dates.',
-      inputSchema: z.object({
-        source_module_id: z.number().int().positive()
-          .describe('Canvas module ID to clone'),
-        source_course_id: z.number().int().positive()
-          .describe('Course ID containing the source module'),
-        week: z.number().int().positive().optional()
-          .describe('If provided, replace "Week N" in all titles with this week number'),
-        due_date: z.string().optional()
-          .describe('If provided, apply this due date to all graded items'),
-        dest_course_id: z.number().int().positive().optional()
-          .describe('Destination course ID. Defaults to active course.'),
-      }),
-    },
-    async (args) => {
-      const config = configManager.read()
-      let destCourseId: number
-      try {
-        destCourseId = resolveCourseId(config, args.dest_course_id)
-      } catch (err) {
-        return toolError((err as Error).message)
-      }
+          } else if (item.type === 'ExternalUrl') {
+            renderables.push({
+              kind: 'external_url',
+              title: subWeek(item.title),
+              url: item.external_url ?? '',
+            })
 
-      // Fetch source module
-      let sourceModule: Awaited<ReturnType<typeof getModule>>
-      try {
-        sourceModule = await getModule(client, args.source_course_id, args.source_module_id)
-      } catch {
-        return toolError(`Source module ${args.source_module_id} not found in course ${args.source_course_id}`)
-      }
+          } else if (item.type === 'Page') {
+            const pageDetail = detail as { title: string; body: string | null } | null
+            const title = subWeek(pageDetail?.title ?? item.title)
+            const body = pageDetail?.body
+              ? subWeek(pageDetail.body)
+              : undefined
+            renderables.push({ kind: 'page', title, body })
 
-      // Fetch source module items
-      const sourceItems = await listModuleItems(client, args.source_course_id, args.source_module_id)
+          } else if (item.type === 'Assignment') {
+            const asgn = detail as { name: string; points_possible: number; due_at: string | null; submission_types: string[]; description: string | null } | null
+            const title = subWeek(asgn?.name ?? item.title)
+            renderables.push({
+              kind: 'assignment',
+              title,
+              points: asgn?.points_possible ?? 0,
+              due_at: args.due_date ?? asgn?.due_at ?? '',
+              submission_types: asgn?.submission_types ?? ['online_url'],
+              description: asgn?.description ?? undefined,
+            })
 
-      // Fetch underlying object details in parallel
-      const detailFetches = sourceItems.map(async (item) => {
-        if (item.type === 'Assignment' && item.content_id) {
-          try {
-            return { item, detail: await getAssignment(client, args.source_course_id, item.content_id) }
-          } catch {
-            return { item, detail: null }
+          } else if (item.type === 'Quiz') {
+            const quizDetail = detail as { title: string; quiz_type: string; points_possible: number | null; due_at: string | null; time_limit: number | null; allowed_attempts: number; questions?: QuizQuestionInput[] } | null
+            const title = subWeek(quizDetail?.title ?? item.title)
+            renderables.push({
+              kind: 'quiz',
+              title,
+              quiz_type: quizDetail?.quiz_type ?? 'assignment',
+              points: quizDetail?.points_possible ?? 0,
+              due_at: args.due_date ?? quizDetail?.due_at ?? '',
+              time_limit: quizDetail?.time_limit ?? undefined,
+              allowed_attempts: quizDetail?.allowed_attempts,
+              questions: quizDetail?.questions,
+            })
           }
         }
-        if (item.type === 'Quiz' && item.content_id) {
-          try {
-            const [quiz, questions] = await Promise.all([
-              getQuiz(client, args.source_course_id, item.content_id),
-              listQuizQuestions(client, args.source_course_id, item.content_id),
-            ])
-            return { item, detail: { ...quiz, questions } }
-          } catch {
-            return { item, detail: null }
-          }
-        }
-        if (item.type === 'Page' && item.page_url) {
-          try {
-            return { item, detail: await getPage(client, args.source_course_id, item.page_url) }
-          } catch {
-            return { item, detail: null }
-          }
-        }
-        return { item, detail: null }
-      })
 
-      const fetched = await Promise.all(detailFetches)
+        const moduleName = cloneWeek != null
+          ? subWeek(sourceModule.name)
+          : sourceModule.name
 
-      // Week substitution helper
-      function subWeek(text: string): string {
-        if (args.week == null) return text
-        return text.replace(/Week\s+\d+/g, `Week ${args.week}`)
-      }
+        const mod = await createModule(client, destCourseId, { name: moduleName })
 
-      // Build renderables from fetched data
-      const renderables: RenderableItem[] = []
-      for (const { item, detail } of fetched) {
-        if (item.type === 'SubHeader') {
-          renderables.push({ kind: 'subheader', title: subWeek(item.title) })
+        const result = await executeRenderables(
+          client, destCourseId, mod.id, renderables, config
+        )
 
-        } else if (item.type === 'ExternalUrl') {
-          renderables.push({
-            kind: 'external_url',
-            title: subWeek(item.title),
-            url: item.external_url ?? '',
-          })
-
-        } else if (item.type === 'Page') {
-          const pageDetail = detail as { title: string; body: string | null } | null
-          const title = subWeek(pageDetail?.title ?? item.title)
-          const body = pageDetail?.body
-            ? subWeek(pageDetail.body)
-            : undefined
-          renderables.push({ kind: 'page', title, body })
-
-        } else if (item.type === 'Assignment') {
-          const asgn = detail as { name: string; points_possible: number; due_at: string | null; submission_types: string[]; description: string | null } | null
-          const title = subWeek(asgn?.name ?? item.title)
-          renderables.push({
-            kind: 'assignment',
-            title,
-            points: asgn?.points_possible ?? 0,
-            due_at: args.due_date ?? asgn?.due_at ?? '',
-            submission_types: asgn?.submission_types ?? ['online_url'],
-            description: asgn?.description ?? undefined,
-          })
-
-        } else if (item.type === 'Quiz') {
-          const quizDetail = detail as { title: string; quiz_type: string; points_possible: number | null; due_at: string | null; time_limit: number | null; allowed_attempts: number; questions?: QuizQuestionInput[] } | null
-          const title = subWeek(quizDetail?.title ?? item.title)
-          renderables.push({
-            kind: 'quiz',
-            title,
-            quiz_type: quizDetail?.quiz_type ?? 'assignment',
-            points: quizDetail?.points_possible ?? 0,
-            due_at: args.due_date ?? quizDetail?.due_at ?? '',
-            time_limit: quizDetail?.time_limit ?? undefined,
-            allowed_attempts: quizDetail?.allowed_attempts,
-            questions: quizDetail?.questions,
+        if (result.error) {
+          return toJson({
+            module: { id: mod.id, name: mod.name },
+            completed_before_failure: result.completed_before_failure,
+            error: result.error,
           })
         }
-      }
 
-      // Determine cloned module name
-      const moduleName = args.week != null
-        ? subWeek(sourceModule.name)
-        : sourceModule.name
-
-      const mod = await createModule(client, destCourseId, { name: moduleName })
-
-      const result = await executeRenderables(
-        client, destCourseId, mod.id, renderables, config
-      )
-
-      if (result.error) {
         return toJson({
           module: { id: mod.id, name: mod.name },
-          completed_before_failure: result.completed_before_failure,
-          error: result.error,
+          items_created: result.items_created,
+          dry_run: false,
         })
       }
 
-      return toJson({
-        module: { id: mod.id, name: mod.name },
-        items_created: result.items_created,
-        dry_run: false,
-      })
+      return toolError('Unknown template')
     }
   )
 }

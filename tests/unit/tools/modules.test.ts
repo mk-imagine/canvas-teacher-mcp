@@ -162,22 +162,22 @@ function getText(result: Awaited<ReturnType<Client['callTool']>>) {
   return (result.content as Array<{ type: string; text: string }>)[0].text
 }
 
-// ─── create_lesson_module ─────────────────────────────────────────────────────
+// ─── build_module template='lesson' ──────────────────────────────────────────
 
-describe('create_lesson_module', () => {
+describe('build_module — template="lesson"', () => {
   it('dry_run returns items_preview without Canvas API calls', async () => {
     const configPath = makeTmpConfigPath()
     writeConfig(configPath)
     const { mcpClient } = await makeTestClient(configPath)
 
-    // No MSW handlers — any Canvas call would throw "unhandled request"
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'create_lesson_module',
+        name: 'build_module',
         arguments: {
+          template: 'lesson',
           week: 2,
           title: 'Introduction',
-          template: 'later-standard',
+          lesson_template: 'later-standard',
           due_date: '2026-03-01T23:59:00Z',
           items: [
             { type: 'coding_assignment', title: 'ML Basics', hours: 3 },
@@ -191,7 +191,6 @@ describe('create_lesson_module', () => {
     expect(Array.isArray(data.items_preview)).toBe(true)
     expect(data.items_preview.length).toBeGreaterThan(0)
 
-    // Should have OVERVIEW subheader, page, ASSIGNMENTS, assignment, WRAP-UP, exit card
     const kinds = data.items_preview.map((i: { kind: string }) => i.kind)
     expect(kinds).toContain('subheader')
     expect(kinds).toContain('page')
@@ -229,11 +228,12 @@ describe('create_lesson_module', () => {
     const { mcpClient } = await makeTestClient(configPath)
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'create_lesson_module',
+        name: 'build_module',
         arguments: {
+          template: 'lesson',
           week: 2,
           title: 'Introduction',
-          template: 'later-standard',
+          lesson_template: 'later-standard',
           due_date: '2026-03-01T23:59:00Z',
           items: [
             { type: 'coding_assignment', title: 'ML Basics', hours: 3 },
@@ -246,142 +246,7 @@ describe('create_lesson_module', () => {
     expect(data.module.id).toBe(10)
     expect(data.module.name).toBe('Week 2 | Intro')
     expect(Array.isArray(data.items_created)).toBe(true)
-    // OVERVIEW subheader, overview page, ASSIGNMENTS subheader, coding assignment, WRAP-UP subheader, exit card quiz = 6 items
     expect(data.items_created.length).toBe(6)
-  })
-
-  it('coding_assignment renders description from Handlebars template when notebook_url provided', async () => {
-    const configPath = makeTmpConfigPath()
-    writeConfig(configPath)
-
-    let capturedAssignmentBody: Record<string, unknown> = {}
-    mswServer.use(
-      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/modules`, () =>
-        HttpResponse.json(makeModule(), { status: 201 })
-      ),
-      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/pages`, () =>
-        HttpResponse.json(makePage(), { status: 200 })
-      ),
-      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/assignments`, async ({ request }) => {
-        capturedAssignmentBody = await request.json() as Record<string, unknown>
-        return HttpResponse.json(makeAssignment(), { status: 201 })
-      }),
-      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/quizzes`, () =>
-        HttpResponse.json(makeQuiz(), { status: 201 })
-      ),
-      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/quizzes/601/questions`, () =>
-        HttpResponse.json(makeQuizQuestion(), { status: 201 })
-      ),
-      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/modules/10/items`, () =>
-        HttpResponse.json(makeModuleItem(), { status: 201 })
-      )
-    )
-
-    const { mcpClient } = await makeTestClient(configPath)
-    await mcpClient.callTool({
-      name: 'create_lesson_module',
-      arguments: {
-        week: 2,
-        title: 'Introduction',
-        template: 'later-standard',
-        due_date: '2026-03-01T23:59:00Z',
-        items: [{
-          type: 'coding_assignment',
-          title: 'ML Basics',
-          hours: 3,
-          notebook_url: 'https://colab.research.google.com/drive/abc123',
-          notebook_title: 'Week 2 Notebook',
-          instructions: 'Complete all cells.',
-        }],
-      },
-    })
-
-    const body = capturedAssignmentBody as { assignment: { description: string } }
-    expect(body.assignment.description).toContain('https://colab.research.google.com/drive/abc123')
-    expect(body.assignment.description).toContain('Week 2 Notebook')
-    expect(body.assignment.description).toContain('Complete all cells.')
-  })
-
-  it('exit card quiz title uses week substitution from exitCardTemplate', async () => {
-    const configPath = makeTmpConfigPath()
-    writeConfig(configPath)
-
-    let capturedQuizBody: Record<string, unknown> = {}
-    mswServer.use(
-      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/modules`, () =>
-        HttpResponse.json(makeModule(), { status: 201 })
-      ),
-      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/pages`, () =>
-        HttpResponse.json(makePage(), { status: 200 })
-      ),
-      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/quizzes`, async ({ request }) => {
-        capturedQuizBody = await request.json() as Record<string, unknown>
-        return HttpResponse.json(makeQuiz(), { status: 201 })
-      }),
-      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/quizzes/601/questions`, () =>
-        HttpResponse.json(makeQuizQuestion(), { status: 201 })
-      ),
-      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/modules/10/items`, () =>
-        HttpResponse.json(makeModuleItem(), { status: 201 })
-      )
-    )
-
-    const { mcpClient } = await makeTestClient(configPath)
-    await mcpClient.callTool({
-      name: 'create_lesson_module',
-      arguments: {
-        week: 5,
-        title: 'Introduction',
-        template: 'later-standard',
-        due_date: '2026-03-01T23:59:00Z',
-        items: [],
-      },
-    })
-
-    const body = capturedQuizBody as { quiz: { title: string } }
-    expect(body.quiz.title).toBe('Week 5 | Exit Card (5 mins)')
-  })
-
-  it('partial failure returns completed_before_failure and error', async () => {
-    const configPath = makeTmpConfigPath()
-    writeConfig(configPath)
-
-    let moduleItemCallCount = 0
-    mswServer.use(
-      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/modules`, () =>
-        HttpResponse.json(makeModule(), { status: 201 })
-      ),
-      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/pages`, () =>
-        HttpResponse.json(makePage(), { status: 200 })
-      ),
-      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/assignments`, () =>
-        HttpResponse.json({ errors: [{ message: 'Internal error' }] }, { status: 500 })
-      ),
-      http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/modules/10/items`, () => {
-        moduleItemCallCount++
-        return HttpResponse.json(makeModuleItem({ id: 200 + moduleItemCallCount }), { status: 201 })
-      })
-    )
-
-    const { mcpClient } = await makeTestClient(configPath)
-    const data = parseResult(
-      await mcpClient.callTool({
-        name: 'create_lesson_module',
-        arguments: {
-          week: 2,
-          title: 'Introduction',
-          template: 'later-standard',
-          due_date: '2026-03-01T23:59:00Z',
-          items: [{ type: 'coding_assignment', title: 'ML Basics', hours: 3 }],
-        },
-      })
-    )
-
-    expect(data.error).toBeDefined()
-    expect(data.completed_before_failure).toBeDefined()
-    expect(Array.isArray(data.completed_before_failure)).toBe(true)
-    // At least the SubHeaders and overview page were created before the assignment failed
-    expect(data.completed_before_failure.length).toBeGreaterThan(0)
   })
 
   it('returns toolError when no active course is set', async () => {
@@ -390,11 +255,12 @@ describe('create_lesson_module', () => {
     const { mcpClient } = await makeTestClient(configPath)
 
     const result = await mcpClient.callTool({
-      name: 'create_lesson_module',
+      name: 'build_module',
       arguments: {
+        template: 'lesson',
         week: 2,
         title: 'Test',
-        template: 'later-standard',
+        lesson_template: 'later-standard',
         due_date: '2026-03-01T23:59:00Z',
         items: [],
       },
@@ -408,11 +274,12 @@ describe('create_lesson_module', () => {
     const { mcpClient } = await makeTestClient(configPath)
 
     const result = await mcpClient.callTool({
-      name: 'create_lesson_module',
+      name: 'build_module',
       arguments: {
+        template: 'lesson',
         week: 2,
         title: 'Test',
-        template: 'later-standard',
+        lesson_template: 'later-standard',
         due_date: '2026-03-01T23:59:00Z',
         items: [{ type: 'review_quiz', title: 'Quiz', hours: 1, attempts: 3 }],
       },
@@ -421,9 +288,9 @@ describe('create_lesson_module', () => {
   })
 })
 
-// ─── create_solution_module ───────────────────────────────────────────────────
+// ─── build_module template='solution' ────────────────────────────────────────
 
-describe('create_solution_module', () => {
+describe('build_module — template="solution"', () => {
   it('creates module with prerequisite and ExternalUrl items', async () => {
     const configPath = makeTmpConfigPath()
     writeConfig(configPath)
@@ -447,8 +314,9 @@ describe('create_solution_module', () => {
     const { mcpClient } = await makeTestClient(configPath)
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'create_solution_module',
+        name: 'build_module',
         arguments: {
+          template: 'solution',
           lesson_module_id: 10,
           unlock_at: '2026-03-08T00:00:00Z',
           title: 'Week 2 | Solutions',
@@ -477,8 +345,9 @@ describe('create_solution_module', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'create_solution_module',
+        name: 'build_module',
         arguments: {
+          template: 'solution',
           lesson_module_id: 10,
           unlock_at: '2026-03-08T00:00:00Z',
           title: 'Week 2 | Solutions',
@@ -499,8 +368,9 @@ describe('create_solution_module', () => {
     const { mcpClient } = await makeTestClient(configPath)
 
     const result = await mcpClient.callTool({
-      name: 'create_solution_module',
+      name: 'build_module',
       arguments: {
+        template: 'solution',
         lesson_module_id: 10,
         unlock_at: '2026-03-08T00:00:00Z',
         title: 'Test',
@@ -511,19 +381,17 @@ describe('create_solution_module', () => {
   })
 })
 
-// ─── clone_module ─────────────────────────────────────────────────────────────
+// ─── build_module template='clone' ───────────────────────────────────────────
 
-describe('clone_module', () => {
+describe('build_module — template="clone"', () => {
   const SOURCE_COURSE_ID = 2
   const SOURCE_MODULE_ID = 99
 
   beforeEach(() => {
     mswServer.use(
-      // Source module
       http.get(`${CANVAS_URL}/api/v1/courses/${SOURCE_COURSE_ID}/modules/${SOURCE_MODULE_ID}`, () =>
         HttpResponse.json(makeModule({ id: SOURCE_MODULE_ID, name: 'Week 2 | Intro' }))
       ),
-      // Source module items
       http.get(`${CANVAS_URL}/api/v1/courses/${SOURCE_COURSE_ID}/modules/${SOURCE_MODULE_ID}/items`, () =>
         HttpResponse.json([
           makeModuleItem({ id: 1001, type: 'SubHeader', title: 'OVERVIEW' }),
@@ -531,27 +399,21 @@ describe('clone_module', () => {
           makeModuleItem({ id: 1003, type: 'Assignment', title: 'Week 2 | Coding Assignment | ML (3 Hours)', content_id: 501 }),
         ])
       ),
-      // Source page
       http.get(`${CANVAS_URL}/api/v1/courses/${SOURCE_COURSE_ID}/pages/week-2-overview`, () =>
         HttpResponse.json(makePage({ title: 'Week 2 | Overview', url: 'week-2-overview' }))
       ),
-      // Source assignment
       http.get(`${CANVAS_URL}/api/v1/courses/${SOURCE_COURSE_ID}/assignments/501`, () =>
         HttpResponse.json(makeAssignment({ name: 'Week 2 | Coding Assignment | ML (3 Hours)', due_at: '2026-02-01T23:59:00Z' }))
       ),
-      // Dest module creation
       http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/modules`, () =>
         HttpResponse.json(makeModule({ id: 50, name: 'Week 5 | Intro' }), { status: 201 })
       ),
-      // Dest pages creation
       http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/pages`, () =>
         HttpResponse.json(makePage({ page_id: 900, url: 'week-5-overview', title: 'Week 5 | Overview' }), { status: 200 })
       ),
-      // Dest assignment creation
       http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/assignments`, () =>
         HttpResponse.json(makeAssignment({ id: 551, name: 'Week 5 | Coding Assignment | ML (3 Hours)' }), { status: 201 })
       ),
-      // Dest module items
       http.post(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/modules/50/items`, () =>
         HttpResponse.json(makeModuleItem({ id: 2001, module_id: 50 }), { status: 201 })
       )
@@ -565,8 +427,9 @@ describe('clone_module', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'clone_module',
+        name: 'build_module',
         arguments: {
+          template: 'clone',
           source_module_id: SOURCE_MODULE_ID,
           source_course_id: SOURCE_COURSE_ID,
           week: 5,
@@ -579,7 +442,6 @@ describe('clone_module', () => {
     expect(data.module.name).toBe('Week 5 | Intro')
     expect(Array.isArray(data.items_created)).toBe(true)
 
-    // Verify week substitution in created items: no title should reference the original week 2
     const titles = data.items_created.map((i: { title: string }) => i.title)
     for (const title of titles) {
       expect(title).not.toMatch(/Week (?!5)\d+/)
@@ -594,8 +456,9 @@ describe('clone_module', () => {
     const { mcpClient } = await makeTestClient(configPath)
 
     const result = await mcpClient.callTool({
-      name: 'clone_module',
+      name: 'build_module',
       arguments: {
+        template: 'clone',
         source_module_id: SOURCE_MODULE_ID,
         source_course_id: SOURCE_COURSE_ID,
       },

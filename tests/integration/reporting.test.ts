@@ -9,6 +9,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { CanvasClient } from '../../src/canvas/client.js'
 import { ConfigManager } from '../../src/config/manager.js'
 import { registerReportingTools } from '../../src/tools/reporting.js'
+import { registerFindTools } from '../../src/tools/find.js'
 import { SecureStore } from '../../src/security/secure-store.js'
 
 const instanceUrl = process.env.CANVAS_INSTANCE_URL!
@@ -34,6 +35,7 @@ async function makeIntegrationClient(configPath: string, store?: SecureStore) {
   const canvasClient = new CanvasClient({ instanceUrl, apiToken })
   const mcpServer = new McpServer({ name: 'test', version: '0.0.1' })
   registerReportingTools(mcpServer, canvasClient, configManager, secureStore)
+  registerFindTools(mcpServer, canvasClient, configManager)
 
   const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair()
   const mcpClient = new Client({ name: 'int-test-client', version: '0.0.1' })
@@ -77,14 +79,14 @@ function findTokenByCid(store: SecureStore, canvasId: number): string | undefine
   return store.listTokens().find(t => store.resolve(t)?.canvasId === canvasId)
 }
 
-// ─── list_modules ──────────────────────────────────────────────────────────────
+// ─── list_items — modules ──────────────────────────────────────────────────────
 
-describe('Integration: list_modules', () => {
+describe('Integration: list_items — modules', () => {
   it('returns at least one module', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
-    const data = parseResult(await mcpClient.callTool({ name: 'list_modules', arguments: {} }))
+    const data = parseResult(await mcpClient.callTool({ name: 'list_items', arguments: { type: 'modules' } }))
     expect(Array.isArray(data)).toBe(true)
     expect(data.length).toBeGreaterThan(0)
     console.log(`  Found ${data.length} module(s): ${data.map((m: { name: string }) => m.name).join(', ')}`)
@@ -94,7 +96,7 @@ describe('Integration: list_modules', () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
-    const data = parseResult(await mcpClient.callTool({ name: 'list_modules', arguments: {} }))
+    const data = parseResult(await mcpClient.callTool({ name: 'list_items', arguments: { type: 'modules' } }))
     const seedModule = data.find((m: { id: number }) => m.id === moduleId)
     expect(seedModule, `Module ${moduleId} not found in list`).toBeDefined()
     expect(seedModule.items_count).toBe(4)
@@ -148,15 +150,15 @@ describe('Integration: get_module_summary', () => {
   })
 })
 
-// ─── list_assignment_groups ────────────────────────────────────────────────────
+// ─── list_items — assignment_groups ───────────────────────────────────────────
 
-describe('Integration: list_assignment_groups', () => {
+describe('Integration: list_items — assignment_groups', () => {
   it('returns at least one assignment group with required fields', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
     const data = parseResult(
-      await mcpClient.callTool({ name: 'list_assignment_groups', arguments: {} })
+      await mcpClient.callTool({ name: 'list_items', arguments: { type: 'assignment_groups' } })
     )
     expect(data.length).toBeGreaterThan(0)
     const group = data[0]
@@ -168,14 +170,14 @@ describe('Integration: list_assignment_groups', () => {
   })
 })
 
-// ─── get_class_grade_summary ───────────────────────────────────────────────────
+// ─── get_grades — scope=class ─────────────────────────────────────────────────
 
-describe('Integration: get_class_grade_summary', () => {
+describe('Integration: get_grades — scope=class', () => {
   it('returns enrolled students with blinded tokens', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
-    const result = await mcpClient.callTool({ name: 'get_class_grade_summary', arguments: {} })
+    const result = await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'class' } })
     const content = getContent(result)
     const data = parseResult(result)
     expect(content[0].annotations?.audience).toEqual(['assistant'])
@@ -192,7 +194,7 @@ describe('Integration: get_class_grade_summary', () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const { mcpClient, store } = await makeIntegrationClient(configPath)
-    const result = await mcpClient.callTool({ name: 'get_class_grade_summary', arguments: {} })
+    const result = await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'class' } })
     const assistantText = getContent(result)[0].text
     // Verify all names in the lookup table do NOT appear in assistant content
     const userText = getContent(result)[1].text
@@ -210,7 +212,7 @@ describe('Integration: get_class_grade_summary', () => {
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
     const data = parseResult(
-      await mcpClient.callTool({ name: 'get_class_grade_summary', arguments: {} })
+      await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'class' } })
     )
     expect(data.student_count).toBe(5)
   })
@@ -221,7 +223,7 @@ describe('Integration: get_class_grade_summary', () => {
     const store = new SecureStore()
     const { mcpClient } = await makeIntegrationClient(configPath, store)
     const data = parseResult(
-      await mcpClient.callTool({ name: 'get_class_grade_summary', arguments: {} })
+      await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'class' } })
     )
     const s4token = findTokenByCid(store, studentIds[3])
     expect(s4token, 'Student 4 token not found').toBeDefined()
@@ -239,7 +241,7 @@ describe('Integration: get_class_grade_summary', () => {
     const store = new SecureStore()
     const { mcpClient } = await makeIntegrationClient(configPath, store)
     const data = parseResult(
-      await mcpClient.callTool({ name: 'get_class_grade_summary', arguments: {} })
+      await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'class' } })
     )
     const s2token = findTokenByCid(store, studentIds[1])
     expect(s2token, 'Student 2 token not found').toBeDefined()
@@ -255,7 +257,7 @@ describe('Integration: get_class_grade_summary', () => {
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
     const data = parseResult(
-      await mcpClient.callTool({ name: 'get_class_grade_summary', arguments: {} })
+      await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'class' } })
     )
     expect(data.sort_by).toBe('name')
   })
@@ -265,7 +267,7 @@ describe('Integration: get_class_grade_summary', () => {
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
     const data = parseResult(
-      await mcpClient.callTool({ name: 'get_class_grade_summary', arguments: {} })
+      await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'class' } })
     )
     for (const student of data.students) {
       expect(typeof student.zeros_count).toBe('number')
@@ -279,8 +281,8 @@ describe('Integration: get_class_grade_summary', () => {
     const { mcpClient } = await makeIntegrationClient(configPath, store)
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'get_class_grade_summary',
-        arguments: { sort_by: 'engagement' },
+        name: 'get_grades',
+        arguments: { scope: 'class', sort_by: 'engagement' },
       })
     )
     expect(data.sort_by).toBe('engagement')
@@ -299,8 +301,8 @@ describe('Integration: get_class_grade_summary', () => {
     const { mcpClient } = await makeIntegrationClient(configPath)
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'get_class_grade_summary',
-        arguments: { sort_by: 'grade' },
+        name: 'get_grades',
+        arguments: { scope: 'class', sort_by: 'grade' },
       })
     )
     expect(data.sort_by).toBe('grade')
@@ -319,8 +321,8 @@ describe('Integration: get_class_grade_summary', () => {
     const { mcpClient } = await makeIntegrationClient(configPath)
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'get_class_grade_summary',
-        arguments: { sort_by: 'zeros' },
+        name: 'get_grades',
+        arguments: { scope: 'class', sort_by: 'zeros' },
       })
     )
     expect(data.sort_by).toBe('zeros')
@@ -333,16 +335,16 @@ describe('Integration: get_class_grade_summary', () => {
   })
 })
 
-// ─── get_assignment_breakdown ──────────────────────────────────────────────────
+// ─── get_grades — scope=assignment ────────────────────────────────────────────
 
-describe('Integration: get_assignment_breakdown', () => {
+describe('Integration: get_grades — scope=assignment', () => {
   it.skipIf(!hasSeedIds)('returns correct metadata for Assignment 1 (blinded)', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
     const result = await mcpClient.callTool({
-      name: 'get_assignment_breakdown',
-      arguments: { assignment_id: assignment1Id },
+      name: 'get_grades',
+      arguments: { scope: 'assignment', assignment_id: assignment1Id },
     })
     const content = getContent(result)
     expect(content[0].annotations?.audience).toEqual(['assistant'])
@@ -364,8 +366,8 @@ describe('Integration: get_assignment_breakdown', () => {
     const { mcpClient } = await makeIntegrationClient(configPath, store)
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'get_assignment_breakdown',
-        arguments: { assignment_id: assignment1Id },
+        name: 'get_grades',
+        arguments: { scope: 'assignment', assignment_id: assignment1Id },
       })
     )
     const s4token = findTokenByCid(store, studentIds[3])
@@ -384,8 +386,8 @@ describe('Integration: get_assignment_breakdown', () => {
     const { mcpClient } = await makeIntegrationClient(configPath, store)
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'get_assignment_breakdown',
-        arguments: { assignment_id: assignment1Id },
+        name: 'get_grades',
+        arguments: { scope: 'assignment', assignment_id: assignment1Id },
       })
     )
     const s1token = findTokenByCid(store, studentIds[0])
@@ -397,24 +399,24 @@ describe('Integration: get_assignment_breakdown', () => {
   })
 })
 
-// ─── get_student_report ────────────────────────────────────────────────────────
+// ─── get_grades — scope=student ───────────────────────────────────────────────
 
-describe('Integration: get_student_report', () => {
+describe('Integration: get_grades — scope=student', () => {
   it.skipIf(!hasSeedIds)('Student 4: 3 assignments missing (A1, A2, exit card; A3 not yet due)', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const store = new SecureStore()
     const { mcpClient } = await makeIntegrationClient(configPath, store)
 
-    // Populate tokens by calling get_class_grade_summary first
-    await mcpClient.callTool({ name: 'get_class_grade_summary', arguments: {} })
+    // Populate tokens by calling get_grades first
+    await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'class' } })
     const s4token = findTokenByCid(store, studentIds[3])
     expect(s4token, 'Student 4 token not found').toBeDefined()
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'get_student_report',
-        arguments: { student_token: s4token! },
+        name: 'get_grades',
+        arguments: { scope: 'student', student_token: s4token! },
       })
     )
     // A3 is due in the future so it is not yet missing; A1, A2, exit card are past due
@@ -431,15 +433,15 @@ describe('Integration: get_student_report', () => {
     const store = new SecureStore()
     const { mcpClient } = await makeIntegrationClient(configPath, store)
 
-    // Populate tokens by calling get_class_grade_summary first
-    await mcpClient.callTool({ name: 'get_class_grade_summary', arguments: {} })
+    // Populate tokens by calling get_grades first
+    await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'class' } })
     const s1token = findTokenByCid(store, studentIds[0])
     expect(s1token, 'Student 1 token not found').toBeDefined()
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'get_student_report',
-        arguments: { student_token: s1token! },
+        name: 'get_grades',
+        arguments: { scope: 'student', student_token: s1token! },
       })
     )
     // graded_survey auto-grades on submission, so exit card counts as graded
@@ -456,14 +458,14 @@ describe('Integration: get_student_report', () => {
     const { mcpClient } = await makeIntegrationClient(configPath, store)
 
     // Populate tokens
-    const summaryResult = await mcpClient.callTool({ name: 'get_class_grade_summary', arguments: {} })
+    const summaryResult = await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'class' } })
     const tokens = store.listTokens()
     if (tokens.length === 0) return // no students, skip
 
     const token = tokens[0]
     const result = await mcpClient.callTool({
-      name: 'get_student_report',
-      arguments: { student_token: token },
+      name: 'get_grades',
+      arguments: { scope: 'student', student_token: token },
     })
     const assistantText = getContent(result)[0].text
     const resolved = store.resolve(token)!
@@ -481,24 +483,24 @@ describe('Integration: get_student_report', () => {
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
     const result = await mcpClient.callTool({
-      name: 'get_student_report',
-      arguments: { student_token: '[STUDENT_999]' },
+      name: 'get_grades',
+      arguments: { scope: 'student', student_token: '[STUDENT_999]' },
     })
     const text = getContent(result)[0].text
     expect(text).toContain('Unknown student token')
   })
 })
 
-// ─── get_missing_assignments ───────────────────────────────────────────────────
+// ─── get_submission_status — type=missing ─────────────────────────────────────
 
-describe('Integration: get_missing_assignments', () => {
+describe('Integration: get_submission_status — type=missing', () => {
   it.skipIf(!hasSeedIds)('Student 2 and Student 4 both appear in missing list', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const store = new SecureStore()
     const { mcpClient } = await makeIntegrationClient(configPath, store)
     const data = parseResult(
-      await mcpClient.callTool({ name: 'get_missing_assignments', arguments: {} })
+      await mcpClient.callTool({ name: 'get_submission_status', arguments: { type: 'missing' } })
     )
     // At minimum Student 2 (A2, exit card) and Student 4 (A1, A2, exit card) are missing
     expect(data.students.length).toBeGreaterThanOrEqual(2)
@@ -520,7 +522,7 @@ describe('Integration: get_missing_assignments', () => {
     const store = new SecureStore()
     const { mcpClient } = await makeIntegrationClient(configPath, store)
     const data = parseResult(
-      await mcpClient.callTool({ name: 'get_missing_assignments', arguments: {} })
+      await mcpClient.callTool({ name: 'get_submission_status', arguments: { type: 'missing' } })
     )
     const s4token = findTokenByCid(store, studentIds[3])
     const s4 = data.students.find((s: { student: string }) => s.student === s4token)
@@ -535,7 +537,7 @@ describe('Integration: get_missing_assignments', () => {
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
     const data = parseResult(
-      await mcpClient.callTool({ name: 'get_missing_assignments', arguments: {} })
+      await mcpClient.callTool({ name: 'get_submission_status', arguments: { type: 'missing' } })
     )
     // Verify descending sort — each student's missing_count is >= the next
     for (let i = 0; i < data.students.length - 1; i++) {
@@ -549,8 +551,8 @@ describe('Integration: get_missing_assignments', () => {
     const { mcpClient } = await makeIntegrationClient(configPath)
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'get_missing_assignments',
-        arguments: { since_date: '2099-01-01T00:00:00Z' },
+        name: 'get_submission_status',
+        arguments: { type: 'missing', since_date: '2099-01-01T00:00:00Z' },
       })
     )
     expect(data.students).toEqual([])
@@ -561,7 +563,7 @@ describe('Integration: get_missing_assignments', () => {
     makeConfig(configPath)
     const store = new SecureStore()
     const { mcpClient } = await makeIntegrationClient(configPath, store)
-    const result = await mcpClient.callTool({ name: 'get_missing_assignments', arguments: {} })
+    const result = await mcpClient.callTool({ name: 'get_submission_status', arguments: { type: 'missing' } })
     const assistantText = getContent(result)[0].text
     const userText = getContent(result)[1].text
     const names = userText.split('\n').slice(1)
@@ -574,16 +576,16 @@ describe('Integration: get_missing_assignments', () => {
   })
 })
 
-// ─── get_late_assignments ──────────────────────────────────────────────────────
+// ─── get_submission_status — type=late ────────────────────────────────────────
 
-describe('Integration: get_late_assignments', () => {
+describe('Integration: get_submission_status — type=late', () => {
   it.skipIf(!hasSeedIds)('Student 4 not in late list (never submitted)', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const store = new SecureStore()
     const { mcpClient } = await makeIntegrationClient(configPath, store)
     const data = parseResult(
-      await mcpClient.callTool({ name: 'get_late_assignments', arguments: {} })
+      await mcpClient.callTool({ name: 'get_submission_status', arguments: { type: 'late' } })
     )
     const s4token = findTokenByCid(store, studentIds[3])
     const s4 = data.students.find((s: { student: string }) => s.student === s4token)
@@ -600,7 +602,7 @@ describe('Integration: get_late_assignments', () => {
     const store = new SecureStore()
     const { mcpClient } = await makeIntegrationClient(configPath, store)
     const data = parseResult(
-      await mcpClient.callTool({ name: 'get_late_assignments', arguments: {} })
+      await mcpClient.callTool({ name: 'get_submission_status', arguments: { type: 'late' } })
     )
     const s1token = findTokenByCid(store, studentIds[0])
     expect(s1token, 'Student 1 not tokenized').toBeDefined()
@@ -616,7 +618,7 @@ describe('Integration: get_late_assignments', () => {
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
     const data = parseResult(
-      await mcpClient.callTool({ name: 'get_late_assignments', arguments: {} })
+      await mcpClient.callTool({ name: 'get_submission_status', arguments: { type: 'late' } })
     )
     expect(data.students.length).toBeGreaterThan(0)
     const firstStudent = data.students[0]
@@ -630,7 +632,7 @@ describe('Integration: get_late_assignments', () => {
     makeConfig(configPath)
     const store = new SecureStore()
     const { mcpClient } = await makeIntegrationClient(configPath, store)
-    const result = await mcpClient.callTool({ name: 'get_late_assignments', arguments: {} })
+    const result = await mcpClient.callTool({ name: 'get_submission_status', arguments: { type: 'late' } })
     const assistantText = getContent(result)[0].text
     const userText = getContent(result)[1].text
     const names = userText.split('\n').slice(1)

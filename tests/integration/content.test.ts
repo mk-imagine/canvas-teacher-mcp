@@ -9,6 +9,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { CanvasClient } from '../../src/canvas/client.js'
 import { ConfigManager } from '../../src/config/manager.js'
 import { registerContentTools } from '../../src/tools/content.js'
+import { registerFindTools } from '../../src/tools/find.js'
 
 const instanceUrl = process.env.CANVAS_INSTANCE_URL!
 const apiToken = process.env.CANVAS_API_TOKEN!
@@ -60,6 +61,7 @@ async function makeIntegrationClient(configPath: string) {
   const canvasClient = new CanvasClient({ instanceUrl, apiToken })
   const mcpServer = new McpServer({ name: 'test', version: '0.0.1' })
   registerContentTools(mcpServer, canvasClient, configManager)
+  registerFindTools(mcpServer, canvasClient, configManager)
 
   const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair()
   const mcpClient = new Client({ name: 'int-test-client', version: '0.0.1' })
@@ -86,42 +88,42 @@ afterAll(async () => {
   const hasCleanup = createdAssignmentIds.length + createdQuizIds.length + createdPageUrls.length +
     createdDiscussionIds.length + createdFileIds.length + createdRubricIds.length > 0
   if (!hasCleanup) return
+  const canvasClient = new CanvasClient({ instanceUrl, apiToken })
+  const { deleteAssignment } = await import('../../src/canvas/assignments.js')
+  const { deleteQuiz } = await import('../../src/canvas/quizzes.js')
+  const { deletePage } = await import('../../src/canvas/pages.js')
+  const { deleteDiscussionTopic } = await import('../../src/canvas/discussions.js')
+  const { deleteFile } = await import('../../src/canvas/files.js')
+  const { deleteRubric } = await import('../../src/canvas/rubrics.js')
   const configPath = makeTmpConfigPath()
   makeConfig(configPath)
   const { mcpClient } = await makeIntegrationClient(configPath)
   for (const id of createdAssignmentIds) {
-    await mcpClient.callTool({ name: 'delete_assignment', arguments: { assignment_id: id } })
+    try { await deleteAssignment(canvasClient, testCourseId, id) } catch { /* ignore */ }
   }
   for (const id of createdQuizIds) {
-    await mcpClient.callTool({ name: 'delete_quiz', arguments: { quiz_id: id } })
+    try { await deleteQuiz(canvasClient, testCourseId, id) } catch { /* ignore */ }
   }
   for (const url of createdPageUrls) {
-    await mcpClient.callTool({ name: 'delete_page', arguments: { page_url: url } })
+    try { await deletePage(canvasClient, testCourseId, url) } catch { /* ignore */ }
   }
   for (const id of createdDiscussionIds) {
-    await mcpClient.callTool({ name: 'delete_discussion', arguments: { topic_id: id } })
+    try { await deleteDiscussionTopic(canvasClient, testCourseId, id) } catch { /* ignore */ }
   }
   for (const id of createdFileIds) {
     await mcpClient.callTool({ name: 'delete_file', arguments: { file_id: id } })
   }
-  // Rubrics need direct Canvas API calls since delete_rubric isn't exposed as a tool without course_id
-  if (createdRubricIds.length > 0) {
-    const { deleteRubric } = await import('../../src/canvas/rubrics.js')
-    const canvasClient = new CanvasClient({ instanceUrl, apiToken })
-    for (const id of createdRubricIds) {
-      try {
-        await deleteRubric(canvasClient, testCourseId, id)
-      } catch {
-        console.warn(`  Warning: failed to delete rubric id=${id} (may already be deleted)`)
-      }
+  for (const id of createdRubricIds) {
+    try { await deleteRubric(canvasClient, testCourseId, id) } catch {
+      console.warn(`  Warning: failed to delete rubric id=${id} (may already be deleted)`)
     }
   }
   console.log(`  Cleanup: deleted ${createdAssignmentIds.length} assignments, ${createdQuizIds.length} quizzes, ${createdPageUrls.length} pages, ${createdDiscussionIds.length} discussions, ${createdFileIds.length} files, ${createdRubricIds.length} rubrics`)
 })
 
-// ─── create_assignment ────────────────────────────────────────────────────────
+// ─── create_item — assignment ────────────────────────────────────────────────
 
-describe('Integration: create_assignment', () => {
+describe('Integration: create_item — assignment', () => {
   it('creates an assignment and verifies fields round-trip', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -129,8 +131,9 @@ describe('Integration: create_assignment', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'create_assignment',
+        name: 'create_item',
         arguments: {
+          type: 'assignment',
           name: '[MCP TEST] Integration Assignment',
           points_possible: 15,
           published: false,
@@ -155,8 +158,9 @@ describe('Integration: create_assignment', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'create_assignment',
+        name: 'create_item',
         arguments: {
+          type: 'assignment',
           name: '[MCP TEST] Notebook Assignment',
           notebook_url: 'https://colab.research.google.com/drive/test123',
           notebook_title: 'Week 99 Notebook',
@@ -172,9 +176,9 @@ describe('Integration: create_assignment', () => {
   })
 })
 
-// ─── update_assignment ────────────────────────────────────────────────────────
+// ─── update_item — assignment ─────────────────────────────────────────────────
 
-describe('Integration: update_assignment', () => {
+describe('Integration: update_item — assignment', () => {
   it('updates assignment name and verifies response', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -183,8 +187,8 @@ describe('Integration: update_assignment', () => {
     // Create first
     const created = parseResult(
       await mcpClient.callTool({
-        name: 'create_assignment',
-        arguments: { name: '[MCP TEST] To Be Renamed', points_possible: 10, published: false },
+        name: 'create_item',
+        arguments: { type: 'assignment', name: '[MCP TEST] To Be Renamed', points_possible: 10, published: false },
       })
     )
     createdAssignmentIds.push(created.id)
@@ -192,8 +196,8 @@ describe('Integration: update_assignment', () => {
     // Then update
     const updated = parseResult(
       await mcpClient.callTool({
-        name: 'update_assignment',
-        arguments: { assignment_id: created.id, name: '[MCP TEST] Renamed Assignment' },
+        name: 'update_item',
+        arguments: { type: 'assignment', search: 'To Be Renamed', name: '[MCP TEST] Renamed Assignment' },
       })
     )
 
@@ -203,9 +207,9 @@ describe('Integration: update_assignment', () => {
   })
 })
 
-// ─── create_quiz ─────────────────────────────────────────────────────────────
+// ─── create_item — quiz ───────────────────────────────────────────────────────
 
-describe('Integration: create_quiz', () => {
+describe('Integration: create_item — quiz', () => {
   it('creates a quiz from exit card template with week substitution', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -213,8 +217,8 @@ describe('Integration: create_quiz', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'create_quiz',
-        arguments: { use_exit_card_template: true, week: 99, published: false },
+        name: 'create_item',
+        arguments: { type: 'quiz', use_exit_card_template: true, week: 99, published: false },
       })
     )
 
@@ -235,8 +239,9 @@ describe('Integration: create_quiz', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'create_quiz',
+        name: 'create_item',
         arguments: {
+          type: 'quiz',
           title: '[MCP TEST] Practice Quiz',
           quiz_type: 'practice_quiz',
           published: false,
@@ -255,9 +260,9 @@ describe('Integration: create_quiz', () => {
   })
 })
 
-// ─── update_quiz ──────────────────────────────────────────────────────────────
+// ─── update_item — quiz ───────────────────────────────────────────────────────
 
-describe('Integration: update_quiz', () => {
+describe('Integration: update_item — quiz', () => {
   it('updates quiz title', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -265,16 +270,16 @@ describe('Integration: update_quiz', () => {
 
     const created = parseResult(
       await mcpClient.callTool({
-        name: 'create_quiz',
-        arguments: { title: '[MCP TEST] Original Title', quiz_type: 'practice_quiz', published: false, questions: [] },
+        name: 'create_item',
+        arguments: { type: 'quiz', title: '[MCP TEST] Original Title', quiz_type: 'practice_quiz', published: false, questions: [] },
       })
     )
     createdQuizIds.push(created.id)
 
     const updated = parseResult(
       await mcpClient.callTool({
-        name: 'update_quiz',
-        arguments: { quiz_id: created.id, title: '[MCP TEST] Updated Title' },
+        name: 'update_item',
+        arguments: { type: 'quiz', search: 'Original Title', title: '[MCP TEST] Updated Title' },
       })
     )
 
@@ -295,19 +300,25 @@ describe('Integration: module item CRUD', () => {
     // Create an assignment to link
     const assignment = parseResult(
       await mcpClient.callTool({
-        name: 'create_assignment',
-        arguments: { name: '[MCP TEST] Module Item Assignment', points_possible: 5, published: false },
+        name: 'create_item',
+        arguments: { type: 'assignment', name: '[MCP TEST] Module Item Assignment', points_possible: 5, published: false },
       })
     )
     createdAssignmentIds.push(assignment.id)
 
+    // Look up the seed module name
+    const modules = parseResult(await mcpClient.callTool({ name: 'list_items', arguments: { type: 'modules' } }))
+    const seedMod = modules.find((m: { id: number }) => m.id === moduleId)
+    const moduleName: string = seedMod.name
+
     // Add it to the seed module
     const item = parseResult(
       await mcpClient.callTool({
-        name: 'add_module_item',
+        name: 'create_item',
         arguments: {
-          module_id: moduleId,
-          type: 'Assignment',
+          type: 'module_item',
+          module_name: moduleName,
+          item_type: 'Assignment',
           title: '[MCP TEST] Module Item Assignment',
           content_id: assignment.id,
           completion_requirement: { type: 'min_score', min_score: 1 },
@@ -318,11 +329,11 @@ describe('Integration: module item CRUD', () => {
     expect(item.type).toBe('Assignment')
     console.log(`  Added module item id=${item.id}`)
 
-    // Update its position
+    // Update its title
     const updated = parseResult(
       await mcpClient.callTool({
-        name: 'update_module_item',
-        arguments: { module_id: moduleId, item_id: item.id, title: '[MCP TEST] Renamed Item' },
+        name: 'update_item',
+        arguments: { type: 'module_item', module_name: moduleName, search: '[MCP TEST] Module Item Assignment', title: '[MCP TEST] Renamed Item' },
       })
     )
     expect(updated.id).toBe(item.id)
@@ -331,27 +342,31 @@ describe('Integration: module item CRUD', () => {
     // Remove it
     const removed = parseResult(
       await mcpClient.callTool({
-        name: 'remove_module_item',
-        arguments: { module_id: moduleId, item_id: item.id },
+        name: 'delete_item',
+        arguments: { type: 'module_item', module_name: moduleName, search: '[MCP TEST] Renamed Item' },
       })
     )
-    expect(removed.deleted).toBe(true)
+    expect(removed.removed).toBe(true)
     console.log(`  Removed module item id=${item.id}`)
   })
 })
 
-// ─── update_module ────────────────────────────────────────────────────────────
+// ─── update_item — module ─────────────────────────────────────────────────────
 
-describe('Integration: update_module', () => {
+describe('Integration: update_item — module', () => {
   it.skipIf(!hasSeedIds)('can set unlock_at on the seed module', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
 
+    const modules = parseResult(await mcpClient.callTool({ name: 'list_items', arguments: { type: 'modules' } }))
+    const seedMod = modules.find((m: { id: number }) => m.id === moduleId)
+    const moduleName: string = seedMod.name
+
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'update_module',
-        arguments: { module_id: moduleId, unlock_at: '2099-01-01T00:00:00Z' },
+        name: 'update_item',
+        arguments: { type: 'module', search: moduleName, unlock_at: '2099-01-01T00:00:00Z' },
       })
     )
 
@@ -361,16 +376,16 @@ describe('Integration: update_module', () => {
 
     // Restore
     await mcpClient.callTool({
-      name: 'update_module',
-      arguments: { module_id: moduleId, unlock_at: null },
+      name: 'update_item',
+      arguments: { type: 'module', search: moduleName, unlock_at: null },
     })
     console.log(`  Module ${moduleId} unlock_at cleared`)
   })
 })
 
-// ─── delete_module ────────────────────────────────────────────────────────────
+// ─── delete_item — module ─────────────────────────────────────────────────────
 
-describe('Integration: delete_module', () => {
+describe('Integration: delete_item — module', () => {
   it('creates a module then deletes it', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -380,6 +395,7 @@ describe('Integration: delete_module', () => {
     const canvasClient = new CanvasClient({ instanceUrl, apiToken })
     const mcpServer = new McpServer({ name: 'test', version: '0.0.1' })
     registerContentTools(mcpServer, canvasClient, configManager)
+    registerFindTools(mcpServer, canvasClient, configManager)
     const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair()
     const mcpClient = new Client({ name: 'int-test-client', version: '0.0.1' })
     await mcpServer.connect(serverTransport)
@@ -392,20 +408,19 @@ describe('Integration: delete_module', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'delete_module',
-        arguments: { module_id: mod.id },
+        name: 'delete_item',
+        arguments: { type: 'module', search: '[MCP TEST] Throwaway Module' },
       })
     )
 
     expect(data.deleted).toBe(true)
-    expect(data.module_id).toBe(mod.id)
     console.log(`  Deleted module id=${mod.id}`)
   })
 })
 
-// ─── delete_assignment ────────────────────────────────────────────────────────
+// ─── delete_item — assignment ─────────────────────────────────────────────────
 
-describe('Integration: delete_assignment', () => {
+describe('Integration: delete_item — assignment', () => {
   it('creates an assignment then deletes it', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -413,28 +428,27 @@ describe('Integration: delete_assignment', () => {
 
     const created = parseResult(
       await mcpClient.callTool({
-        name: 'create_assignment',
-        arguments: { name: '[MCP TEST] To Be Deleted', points_possible: 5, published: false },
+        name: 'create_item',
+        arguments: { type: 'assignment', name: '[MCP TEST] To Be Deleted', points_possible: 5, published: false },
       })
     )
     console.log(`  Created assignment id=${created.id}`)
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'delete_assignment',
-        arguments: { assignment_id: created.id },
+        name: 'delete_item',
+        arguments: { type: 'assignment', search: 'To Be Deleted' },
       })
     )
 
     expect(data.deleted).toBe(true)
-    expect(data.assignment_id).toBe(created.id)
     console.log(`  Deleted assignment id=${created.id}`)
   })
 })
 
-// ─── delete_quiz ──────────────────────────────────────────────────────────────
+// ─── delete_item — quiz ───────────────────────────────────────────────────────
 
-describe('Integration: delete_quiz', () => {
+describe('Integration: delete_item — quiz', () => {
   it('creates a quiz then deletes it', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -442,28 +456,27 @@ describe('Integration: delete_quiz', () => {
 
     const created = parseResult(
       await mcpClient.callTool({
-        name: 'create_quiz',
-        arguments: { title: '[MCP TEST] To Be Deleted', quiz_type: 'practice_quiz', published: false, questions: [] },
+        name: 'create_item',
+        arguments: { type: 'quiz', title: '[MCP TEST] To Be Deleted', quiz_type: 'practice_quiz', published: false, questions: [] },
       })
     )
     console.log(`  Created quiz id=${created.id}`)
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'delete_quiz',
-        arguments: { quiz_id: created.id },
+        name: 'delete_item',
+        arguments: { type: 'quiz', search: 'To Be Deleted' },
       })
     )
 
     expect(data.deleted).toBe(true)
-    expect(data.quiz_id).toBe(created.id)
     console.log(`  Deleted quiz id=${created.id}`)
   })
 })
 
-// ─── create_page ──────────────────────────────────────────────────────────────
+// ─── create_item — page ───────────────────────────────────────────────────────
 
-describe('Integration: create_page', () => {
+describe('Integration: create_item — page', () => {
   it('creates a page and verifies fields round-trip', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -471,8 +484,9 @@ describe('Integration: create_page', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'create_page',
+        name: 'create_item',
         arguments: {
+          type: 'page',
           title: '[MCP TEST] Integration Page',
           body: '<p>Hello from integration test.</p>',
           published: false,
@@ -480,10 +494,9 @@ describe('Integration: create_page', () => {
       })
     )
 
-    expect(data.page_id).toBeTypeOf('number')
+    expect(data.id).toBeTypeOf('number')
     expect(data.title).toBe('[MCP TEST] Integration Page')
     expect(data.published).toBe(false)
-    expect(data.front_page).toBe(false)
     expect(typeof data.url).toBe('string')
 
     createdPageUrls.push(data.url)
@@ -491,9 +504,9 @@ describe('Integration: create_page', () => {
   })
 })
 
-// ─── delete_page ──────────────────────────────────────────────────────────────
+// ─── delete_item — page ───────────────────────────────────────────────────────
 
-describe('Integration: delete_page', () => {
+describe('Integration: delete_item — page', () => {
   it('creates a page then deletes it', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -501,21 +514,20 @@ describe('Integration: delete_page', () => {
 
     const created = parseResult(
       await mcpClient.callTool({
-        name: 'create_page',
-        arguments: { title: '[MCP TEST] To Be Deleted Page', published: false },
+        name: 'create_item',
+        arguments: { type: 'page', title: '[MCP TEST] To Be Deleted Page', published: false },
       })
     )
     console.log(`  Created page url="${created.url}"`)
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'delete_page',
-        arguments: { page_url: created.url },
+        name: 'delete_item',
+        arguments: { type: 'page', search: 'To Be Deleted Page' },
       })
     )
 
     expect(data.deleted).toBe(true)
-    expect(data.page_url).toBe(created.url)
     console.log(`  Deleted page url="${created.url}"`)
   })
 
@@ -537,12 +549,11 @@ describe('Integration: delete_page', () => {
 
     // Attempt deletion via the MCP tool — should fail
     const result = await mcpClient.callTool({
-      name: 'delete_page',
-      arguments: { page_url: page.url },
+      name: 'delete_item',
+      arguments: { type: 'page', search: 'Temp Front Page' },
     })
     const text = (result.content as Array<{ type: string; text: string }>)[0].text
     expect(text).toContain('front page')
-    expect(text).toContain(page.url)
     console.log(`  Correctly rejected deletion of front page`)
 
     // Cleanup: unset front page designation then delete directly
@@ -552,9 +563,9 @@ describe('Integration: delete_page', () => {
   })
 })
 
-// ─── create_discussion ──────────────────────────────────────────────────────
+// ─── create_item — discussion ────────────────────────────────────────────────
 
-describe('Integration: create_discussion', () => {
+describe('Integration: create_item — discussion', () => {
   it('creates a discussion topic and verifies fields', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -562,8 +573,9 @@ describe('Integration: create_discussion', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'create_discussion',
+        name: 'create_item',
         arguments: {
+          type: 'discussion',
           title: '[MCP TEST] Integration Discussion',
           message: '<p>Discuss this topic.</p>',
           published: false,
@@ -573,25 +585,25 @@ describe('Integration: create_discussion', () => {
 
     expect(data.id).toBeTypeOf('number')
     expect(data.title).toBe('[MCP TEST] Integration Discussion')
-    expect(data.is_announcement).toBe(false)
 
     createdDiscussionIds.push(data.id)
     console.log(`  Created discussion id=${data.id}: "${data.title}"`)
   })
 })
 
-// ─── create_announcement ────────────────────────────────────────────────────
+// ─── create_item — announcement ──────────────────────────────────────────────
 
-describe('Integration: create_announcement', () => {
-  it('creates an announcement with is_announcement=true', async () => {
+describe('Integration: create_item — announcement', () => {
+  it('creates an announcement', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'create_announcement',
+        name: 'create_item',
         arguments: {
+          type: 'announcement',
           title: '[MCP TEST] Integration Announcement',
           message: '<p>Important update.</p>',
         },
@@ -600,8 +612,6 @@ describe('Integration: create_announcement', () => {
 
     expect(data.id).toBeTypeOf('number')
     expect(data.title).toBe('[MCP TEST] Integration Announcement')
-    expect(data.is_announcement).toBe(true)
-    expect(data.published).toBe(true)
 
     createdDiscussionIds.push(data.id)
     console.log(`  Created announcement id=${data.id}: "${data.title}"`)
@@ -650,8 +660,8 @@ describe('Integration: create_rubric', () => {
     // Rubrics must be associated with an assignment at creation time
     const assignment = parseResult(
       await mcpClient.callTool({
-        name: 'create_assignment',
-        arguments: { name: '[MCP TEST] Rubric Host Assignment', points_possible: 10, published: false },
+        name: 'create_item',
+        arguments: { type: 'assignment', name: '[MCP TEST] Rubric Host Assignment', points_possible: 10, published: false },
       })
     )
     createdAssignmentIds.push(assignment.id)
@@ -689,9 +699,9 @@ describe('Integration: create_rubric', () => {
   })
 })
 
-// ─── update_syllabus ────────────────────────────────────────────────────────
+// ─── update_item — syllabus ──────────────────────────────────────────────────
 
-describe('Integration: update_syllabus', () => {
+describe('Integration: update_item — syllabus', () => {
   it('sets syllabus body and then clears it', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -699,30 +709,29 @@ describe('Integration: update_syllabus', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'update_syllabus',
-        arguments: { body: '<h1>[MCP TEST] Syllabus</h1>' },
+        name: 'update_item',
+        arguments: { type: 'syllabus', body: '<h1>[MCP TEST] Syllabus</h1>' },
       })
     )
 
     expect(data.updated).toBe(true)
-    expect(data.course_id).toBe(testCourseId)
     console.log(`  Set syllabus body`)
 
     // Clear it back
     const cleared = parseResult(
       await mcpClient.callTool({
-        name: 'clear_syllabus',
-        arguments: {},
+        name: 'update_item',
+        arguments: { type: 'syllabus', body: '' },
       })
     )
-    expect(cleared.cleared).toBe(true)
+    expect(cleared.updated).toBe(true)
     console.log(`  Cleared syllabus body`)
   })
 })
 
-// ─── delete_discussion ──────────────────────────────────────────────────────
+// ─── delete_item — discussion ────────────────────────────────────────────────
 
-describe('Integration: delete_discussion', () => {
+describe('Integration: delete_item — discussion', () => {
   it('creates a discussion then deletes it', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -730,21 +739,20 @@ describe('Integration: delete_discussion', () => {
 
     const created = parseResult(
       await mcpClient.callTool({
-        name: 'create_discussion',
-        arguments: { title: '[MCP TEST] To Be Deleted Discussion' },
+        name: 'create_item',
+        arguments: { type: 'discussion', title: '[MCP TEST] To Be Deleted Discussion' },
       })
     )
     console.log(`  Created discussion id=${created.id}`)
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'delete_discussion',
-        arguments: { topic_id: created.id },
+        name: 'delete_item',
+        arguments: { type: 'discussion', search: 'To Be Deleted Discussion' },
       })
     )
 
     expect(data.deleted).toBe(true)
-    expect(data.topic_id).toBe(created.id)
     console.log(`  Deleted discussion id=${created.id}`)
   })
 })
@@ -783,9 +791,9 @@ describe('Integration: delete_file', () => {
   })
 })
 
-// ─── get_page ─────────────────────────────────────────────────────────────────
+// ─── find_item — page ─────────────────────────────────────────────────────────
 
-describe('Integration: get_page', () => {
+describe('Integration: find_item — page', () => {
   it('creates a page then retrieves it by slug with body', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -793,8 +801,9 @@ describe('Integration: get_page', () => {
 
     const created = parseResult(
       await mcpClient.callTool({
-        name: 'create_page',
+        name: 'create_item',
         arguments: {
+          type: 'page',
           title: '[MCP TEST] Get Page',
           body: '<p>Body content for retrieval test.</p>',
           published: false,
@@ -806,24 +815,23 @@ describe('Integration: get_page', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'get_page',
-        arguments: { page_url: created.url },
+        name: 'find_item',
+        arguments: { type: 'page', search: 'Get Page' },
       })
     )
 
-    expect(data.page_id).toBe(created.page_id)
-    expect(data.url).toBe(created.url)
+    expect(data.page_id).toBe(created.id)
+    expect(data.page_url).toBe(created.url)
     expect(data.title).toBe('[MCP TEST] Get Page')
     expect(data.body).toContain('Body content for retrieval test.')
     expect(data.published).toBe(false)
-    expect(data.front_page).toBe(false)
-    console.log(`  Retrieved page page_id=${data.page_id} url="${data.url}"`)
+    console.log(`  Retrieved page page_id=${data.page_id} url="${data.page_url}"`)
   })
 })
 
-// ─── list_assignments ─────────────────────────────────────────────────────────
+// ─── list_items — assignments ─────────────────────────────────────────────────
 
-describe('Integration: list_assignments', () => {
+describe('Integration: list_items — assignments', () => {
   it('creates an assignment then verifies it appears in the list', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -831,15 +839,15 @@ describe('Integration: list_assignments', () => {
 
     const created = parseResult(
       await mcpClient.callTool({
-        name: 'create_assignment',
-        arguments: { name: '[MCP TEST] List Assignments Check', points_possible: 5, published: false },
+        name: 'create_item',
+        arguments: { type: 'assignment', name: '[MCP TEST] List Assignments Check', points_possible: 5, published: false },
       })
     )
     createdAssignmentIds.push(created.id)
     console.log(`  Created assignment id=${created.id}`)
 
     const data = parseResult(
-      await mcpClient.callTool({ name: 'list_assignments', arguments: {} })
+      await mcpClient.callTool({ name: 'list_items', arguments: { type: 'assignments' } })
     )
 
     expect(Array.isArray(data)).toBe(true)
@@ -852,18 +860,19 @@ describe('Integration: list_assignments', () => {
   })
 })
 
-// ─── get_assignment ───────────────────────────────────────────────────────────
+// ─── find_item — assignment ───────────────────────────────────────────────────
 
-describe('Integration: get_assignment', () => {
-  it('creates an assignment with a description then retrieves it by ID', async () => {
+describe('Integration: find_item — assignment', () => {
+  it('creates an assignment with a description then retrieves it by name search', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
 
     const created = parseResult(
       await mcpClient.callTool({
-        name: 'create_assignment',
+        name: 'create_item',
         arguments: {
+          type: 'assignment',
           name: '[MCP TEST] Get Assignment',
           points_possible: 20,
           description: '<p>Assignment details for retrieval test.</p>',
@@ -876,8 +885,8 @@ describe('Integration: get_assignment', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'get_assignment',
-        arguments: { assignment_id: created.id },
+        name: 'find_item',
+        arguments: { type: 'assignment', search: 'Get Assignment' },
       })
     )
 
@@ -890,9 +899,9 @@ describe('Integration: get_assignment', () => {
   })
 })
 
-// ─── list_quizzes ─────────────────────────────────────────────────────────────
+// ─── list_items — quizzes ─────────────────────────────────────────────────────
 
-describe('Integration: list_quizzes', () => {
+describe('Integration: list_items — quizzes', () => {
   it('creates a quiz then verifies it appears in the list', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -900,15 +909,15 @@ describe('Integration: list_quizzes', () => {
 
     const created = parseResult(
       await mcpClient.callTool({
-        name: 'create_quiz',
-        arguments: { title: '[MCP TEST] List Quizzes Check', quiz_type: 'practice_quiz', published: false, questions: [] },
+        name: 'create_item',
+        arguments: { type: 'quiz', title: '[MCP TEST] List Quizzes Check', quiz_type: 'practice_quiz', published: false, questions: [] },
       })
     )
     createdQuizIds.push(created.id)
     console.log(`  Created quiz id=${created.id}`)
 
     const data = parseResult(
-      await mcpClient.callTool({ name: 'list_quizzes', arguments: {} })
+      await mcpClient.callTool({ name: 'list_items', arguments: { type: 'quizzes' } })
     )
 
     expect(Array.isArray(data)).toBe(true)
@@ -921,9 +930,9 @@ describe('Integration: list_quizzes', () => {
   })
 })
 
-// ─── get_quiz ─────────────────────────────────────────────────────────────────
+// ─── find_item — quiz ─────────────────────────────────────────────────────────
 
-describe('Integration: get_quiz', () => {
+describe('Integration: find_item — quiz', () => {
   it('creates a quiz with questions then retrieves quiz and questions together', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -931,8 +940,9 @@ describe('Integration: get_quiz', () => {
 
     const created = parseResult(
       await mcpClient.callTool({
-        name: 'create_quiz',
+        name: 'create_item',
         arguments: {
+          type: 'quiz',
           title: '[MCP TEST] Get Quiz',
           quiz_type: 'graded_survey',
           published: false,
@@ -948,26 +958,26 @@ describe('Integration: get_quiz', () => {
 
     const data = parseResult(
       await mcpClient.callTool({
-        name: 'get_quiz',
-        arguments: { quiz_id: created.id },
+        name: 'find_item',
+        arguments: { type: 'quiz', search: 'Get Quiz' },
       })
     )
 
-    expect(data.quiz.id).toBe(created.id)
-    expect(data.quiz.title).toBe('[MCP TEST] Get Quiz')
-    expect(data.quiz.quiz_type).toBe('graded_survey')
+    expect(data.id).toBe(created.id)
+    expect(data.title).toBe('[MCP TEST] Get Quiz')
+    expect(data.quiz_type).toBe('graded_survey')
     expect(Array.isArray(data.questions)).toBe(true)
     expect(data.questions.length).toBe(2)
     const q1 = data.questions.find((q: { question_name: string }) => q.question_name === 'Q1')
     expect(q1).toBeDefined()
     expect(q1.question_text).toBe('How confident are you?')
-    console.log(`  Retrieved quiz id=${data.quiz.id} with ${data.questions.length} questions`)
+    console.log(`  Retrieved quiz id=${data.id} with ${data.questions.length} questions`)
   })
 })
 
-// ─── list_discussions ────────────────────────────────────────────────────────
+// ─── list_items — discussions ────────────────────────────────────────────────
 
-describe('Integration: list_discussions', () => {
+describe('Integration: list_items — discussions', () => {
   it('creates a discussion then verifies it appears in the list', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -975,8 +985,9 @@ describe('Integration: list_discussions', () => {
 
     const created = parseResult(
       await mcpClient.callTool({
-        name: 'create_discussion',
+        name: 'create_item',
         arguments: {
+          type: 'discussion',
           title: '[MCP TEST] List Discussions Check',
           message: '<p>Discussion content.</p>',
           published: false,
@@ -987,7 +998,7 @@ describe('Integration: list_discussions', () => {
     console.log(`  Created discussion id=${created.id}`)
 
     const data = parseResult(
-      await mcpClient.callTool({ name: 'list_discussions', arguments: {} })
+      await mcpClient.callTool({ name: 'list_items', arguments: { type: 'discussions' } })
     )
 
     expect(Array.isArray(data)).toBe(true)
@@ -998,9 +1009,9 @@ describe('Integration: list_discussions', () => {
   })
 })
 
-// ─── list_announcements ──────────────────────────────────────────────────────
+// ─── list_items — announcements ──────────────────────────────────────────────
 
-describe('Integration: list_announcements', () => {
+describe('Integration: list_items — announcements', () => {
   it('creates an announcement then verifies it appears in the announcements list', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -1008,8 +1019,9 @@ describe('Integration: list_announcements', () => {
 
     const created = parseResult(
       await mcpClient.callTool({
-        name: 'create_announcement',
+        name: 'create_item',
         arguments: {
+          type: 'announcement',
           title: '[MCP TEST] List Announcements Check',
           message: '<p>Announcement content.</p>',
         },
@@ -1019,7 +1031,7 @@ describe('Integration: list_announcements', () => {
     console.log(`  Created announcement id=${created.id}`)
 
     const data = parseResult(
-      await mcpClient.callTool({ name: 'list_announcements', arguments: {} })
+      await mcpClient.callTool({ name: 'list_items', arguments: { type: 'announcements' } })
     )
 
     expect(Array.isArray(data)).toBe(true)
@@ -1030,9 +1042,9 @@ describe('Integration: list_announcements', () => {
   })
 })
 
-// ─── list_rubrics ─────────────────────────────────────────────────────────────
+// ─── list_items — rubrics ─────────────────────────────────────────────────────
 
-describe('Integration: list_rubrics', () => {
+describe('Integration: list_items — rubrics', () => {
   it('creates a rubric then verifies it appears in the list', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
@@ -1040,8 +1052,8 @@ describe('Integration: list_rubrics', () => {
 
     const assignment = parseResult(
       await mcpClient.callTool({
-        name: 'create_assignment',
-        arguments: { name: '[MCP TEST] Rubric List Host', points_possible: 10, published: false },
+        name: 'create_item',
+        arguments: { type: 'assignment', name: '[MCP TEST] Rubric List Host', points_possible: 10, published: false },
       })
     )
     createdAssignmentIds.push(assignment.id)
@@ -1062,7 +1074,7 @@ describe('Integration: list_rubrics', () => {
     console.log(`  Created rubric id=${rubric.id}`)
 
     const data = parseResult(
-      await mcpClient.callTool({ name: 'list_rubrics', arguments: {} })
+      await mcpClient.callTool({ name: 'list_items', arguments: { type: 'rubrics' } })
     )
 
     expect(Array.isArray(data)).toBe(true)
@@ -1074,22 +1086,22 @@ describe('Integration: list_rubrics', () => {
   })
 })
 
-// ─── get_syllabus ─────────────────────────────────────────────────────────────
+// ─── find_item — syllabus ─────────────────────────────────────────────────────
 
-describe('Integration: get_syllabus', () => {
+describe('Integration: find_item — syllabus', () => {
   it('sets the syllabus then retrieves it', async () => {
     const configPath = makeTmpConfigPath()
     makeConfig(configPath)
     const { mcpClient } = await makeIntegrationClient(configPath)
 
     await mcpClient.callTool({
-      name: 'update_syllabus',
-      arguments: { body: '<h1>[MCP TEST] Get Syllabus</h1><p>Content.</p>' },
+      name: 'update_item',
+      arguments: { type: 'syllabus', body: '<h1>[MCP TEST] Get Syllabus</h1><p>Content.</p>' },
     })
     console.log(`  Set syllabus body`)
 
     const data = parseResult(
-      await mcpClient.callTool({ name: 'get_syllabus', arguments: {} })
+      await mcpClient.callTool({ name: 'find_item', arguments: { type: 'syllabus' } })
     )
 
     expect(data.syllabus_body).toContain('[MCP TEST] Get Syllabus')
@@ -1097,7 +1109,7 @@ describe('Integration: get_syllabus', () => {
     console.log(`  Retrieved syllabus (${data.syllabus_body?.length ?? 0} chars)`)
 
     // Restore
-    await mcpClient.callTool({ name: 'clear_syllabus', arguments: {} })
+    await mcpClient.callTool({ name: 'update_item', arguments: { type: 'syllabus', body: '' } })
     console.log(`  Cleared syllabus`)
   })
 })
@@ -1114,8 +1126,8 @@ describe('Integration: associate_rubric', () => {
     // Create the initial host assignment (rubric requires an assignment at creation)
     const assignment1 = parseResult(
       await mcpClient.callTool({
-        name: 'create_assignment',
-        arguments: { name: '[MCP TEST] Rubric Initial Host', points_possible: 10 },
+        name: 'create_item',
+        arguments: { type: 'assignment', name: '[MCP TEST] Rubric Initial Host', points_possible: 10 },
       })
     )
     console.log(`  Created assignment1 id=${assignment1.id}`)
@@ -1148,21 +1160,21 @@ describe('Integration: associate_rubric', () => {
     // Create a second assignment to test re-association
     const assignment2 = parseResult(
       await mcpClient.callTool({
-        name: 'create_assignment',
-        arguments: { name: '[MCP TEST] Rubric Re-association Target', points_possible: 10 },
+        name: 'create_item',
+        arguments: { type: 'assignment', name: '[MCP TEST] Rubric Re-association Target', points_possible: 10 },
       })
     )
     console.log(`  Created assignment2 id=${assignment2.id}`)
     expect(assignment2.id).toBeGreaterThan(0)
 
     try {
-      // Associate the rubric with assignment2 (re-association)
-      const association = parseResult(
-        await mcpClient.callTool({
-          name: 'associate_rubric',
-          arguments: { rubric_id: rubric.id, assignment_id: assignment2.id },
-        })
-      )
+      // Associate the rubric with assignment2 (re-association) via direct canvas API
+      const { createRubricAssociation } = await import('../../src/canvas/rubrics.js')
+      const association = await createRubricAssociation(canvasClient, testCourseId, {
+        rubric_id: rubric.id,
+        assignment_id: assignment2.id,
+        use_for_grading: true,
+      })
       console.log(`  Created association id=${association.id} type=${association.association_type}`)
       expect(association.id).toBeGreaterThan(0)
       expect(association.rubric_id).toBe(rubric.id)

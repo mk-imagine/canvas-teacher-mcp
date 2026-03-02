@@ -48,76 +48,26 @@ export function registerResetTools(
 ): void {
   const pendingTokens = new Map<string, PendingToken>()
 
-  // ── preview_course_reset ──────────────────────────────────────────────────
-
-  server.registerTool(
-    'preview_course_reset',
-    {
-      description: 'Dry run — list all content that would be deleted by reset_course. Does not modify anything.',
-      inputSchema: z.object({
-        course_id: z.number().int().positive().optional()
-          .describe('Canvas course ID. Defaults to active course.'),
-      }),
-    },
-    async (args) => {
-      const config = configManager.read()
-      let courseId: number
-      try {
-        courseId = resolveCourseId(config, args.course_id)
-      } catch (err) {
-        return toolError((err as Error).message)
-      }
-
-      const [course, modules, assignments, quizzes, pages, discussions, announcements, files, rubrics, assignmentGroups] = await Promise.all([
-        getCourse(client, courseId),
-        listModules(client, courseId),
-        listAssignments(client, courseId),
-        listQuizzes(client, courseId),
-        listPages(client, courseId),
-        listDiscussionTopics(client, courseId),
-        listAnnouncements(client, courseId),
-        listFiles(client, courseId),
-        listRubrics(client, courseId),
-        listAssignmentGroups(client, courseId),
-      ])
-
-      const token = generateToken()
-      pendingTokens.set(token, { courseId, expiresAt: Date.now() + 5 * 60 * 1000 })
-
-      return toJson({
-        course: { id: course.id, name: course.name },
-        would_delete: {
-          modules: modules.length,
-          assignments: assignments.length,
-          quizzes: quizzes.length,
-          discussions: discussions.length,
-          announcements: announcements.length,
-          pages: pages.length,
-          files: files.length,
-          rubrics: rubrics.length,
-          assignment_groups: assignmentGroups.length,
-        },
-        would_clear: {
-          syllabus: true,
-        },
-        preserves: {
-          enrollments: 'not touched',
-        },
-        confirmation_token: token,
-        instructions: `IMPORTANT: Do NOT call reset_course automatically. Show the user this preview and the confirmation token "${token}", and ask them to explicitly provide the token back to you before proceeding. The token expires in 5 minutes.`,
-      })
-    }
-  )
-
   // ── reset_course ──────────────────────────────────────────────────────────
 
   server.registerTool(
     'reset_course',
     {
-      description: 'Permanently delete all content from a course: modules, assignments, quizzes, discussions, announcements, pages, files, rubrics, assignment groups, and syllabus. Preserves student enrollments. Requires a confirmation_token from preview_course_reset that the user has explicitly approved.',
+      description: [
+        'Reset a course by deleting all content: modules, assignments, quizzes, discussions, announcements,',
+        'pages, files, rubrics, assignment groups, and syllabus. Preserves student enrollments.',
+        'Use dry_run=true to preview what would be deleted and receive a confirmation_token.',
+        'To execute: provide confirmation_token (from dry_run=true, must be supplied by the user) OR',
+        'confirmation_text (exact course name, must be typed by the user).',
+        'IMPORTANT: Do NOT automatically supply confirmation_token or confirmation_text.',
+      ].join(' '),
       inputSchema: z.object({
-        confirmation_token: z.string()
-          .describe('The one-time token returned by preview_course_reset. Must be provided by the user — do not supply this automatically.'),
+        dry_run: z.boolean().default(false)
+          .describe('Preview only — list what would be deleted and return a confirmation_token. Does not modify anything.'),
+        confirmation_token: z.string().optional()
+          .describe('One-time token from dry_run=true call. Must be provided by the user — do not auto-supply.'),
+        confirmation_text: z.string().optional()
+          .describe('Exact course name as an alternative to confirmation_token. Must be typed by the user.'),
         course_id: z.number().int().positive().optional()
           .describe('Canvas course ID. Defaults to active course.'),
       }),
@@ -131,25 +81,81 @@ export function registerResetTools(
         return toolError((err as Error).message)
       }
 
-      // Validate the confirmation token
-      const pending = pendingTokens.get(args.confirmation_token)
-      if (!pending) {
-        return toolError(
-          `Invalid confirmation token "${args.confirmation_token}". Run preview_course_reset to generate a new token.`
-        )
+      // ── dry_run branch ──────────────────────────────────────────────────────
+      if (args.dry_run) {
+        const [course, modules, assignments, quizzes, pages, discussions, announcements, files, rubrics, assignmentGroups] = await Promise.all([
+          getCourse(client, courseId),
+          listModules(client, courseId),
+          listAssignments(client, courseId),
+          listQuizzes(client, courseId),
+          listPages(client, courseId),
+          listDiscussionTopics(client, courseId),
+          listAnnouncements(client, courseId),
+          listFiles(client, courseId),
+          listRubrics(client, courseId),
+          listAssignmentGroups(client, courseId),
+        ])
+
+        const token = generateToken()
+        pendingTokens.set(token, { courseId, expiresAt: Date.now() + 5 * 60 * 1000 })
+
+        return toJson({
+          course: { id: course.id, name: course.name },
+          would_delete: {
+            modules: modules.length,
+            assignments: assignments.length,
+            quizzes: quizzes.length,
+            discussions: discussions.length,
+            announcements: announcements.length,
+            pages: pages.length,
+            files: files.length,
+            rubrics: rubrics.length,
+            assignment_groups: assignmentGroups.length,
+          },
+          would_clear: {
+            syllabus: true,
+          },
+          preserves: {
+            enrollments: 'not touched',
+          },
+          confirmation_token: token,
+          instructions: `IMPORTANT: Do NOT call reset_course automatically. Show the user this preview and the confirmation token "${token}", and ask them to explicitly provide the token back to you before proceeding. The token expires in 5 minutes.`,
+        })
       }
-      if (pending.courseId !== courseId) {
-        return toolError(
-          `Token was issued for a different course. Run preview_course_reset again for this course.`
-        )
-      }
-      if (Date.now() > pending.expiresAt) {
+
+      // ── destructive branch ─────────────────────────────────────────────────
+      if (args.confirmation_token) {
+        // Validate the confirmation token
+        const pending = pendingTokens.get(args.confirmation_token)
+        if (!pending) {
+          return toolError(
+            `Invalid confirmation token "${args.confirmation_token}". Run reset_course(dry_run=true) to generate a new token.`
+          )
+        }
+        if (pending.courseId !== courseId) {
+          return toolError(
+            `Token was issued for a different course. Run reset_course(dry_run=true) again for this course.`
+          )
+        }
+        if (Date.now() > pending.expiresAt) {
+          pendingTokens.delete(args.confirmation_token)
+          return toolError(
+            `Confirmation token has expired. Run reset_course(dry_run=true) to generate a new token.`
+          )
+        }
         pendingTokens.delete(args.confirmation_token)
-        return toolError(
-          `Confirmation token has expired. Run preview_course_reset to generate a new token.`
-        )
+      } else if (args.confirmation_text) {
+        // Validate course name matches exactly
+        const course = await getCourse(client, courseId)
+        if (args.confirmation_text !== course.name) {
+          return toolError(
+            `confirmation_text "${args.confirmation_text}" does not match course name "${course.name}". ` +
+            `Provide the exact course name or use dry_run=true to get a confirmation_token.`
+          )
+        }
+      } else {
+        return toolError('Provide confirmation_token (from dry_run=true) or confirmation_text (exact course name).')
       }
-      pendingTokens.delete(args.confirmation_token)
 
       const course = await getCourse(client, courseId)
 
@@ -179,35 +185,34 @@ export function registerResetTools(
       }
 
       // 2. Delete assignments — deleteAssignment pre-deletes any associated rubric
-      //    (Canvas 500s on orphaned rubrics whose assignment was already deleted)
       const assignments = await listAssignments(client, courseId)
       for (const asgn of assignments) {
         await deleteAssignment(client, courseId, asgn.id)
         deleted.assignments++
       }
 
-      // 3. Delete quizzes (some may already be gone if their assignment was deleted above — 404 handled gracefully by client.delete)
+      // 3. Delete quizzes (some may already be gone if their assignment was deleted above — 404 handled gracefully)
       const quizzes = await listQuizzes(client, courseId)
       for (const quiz of quizzes) {
         await deleteQuiz(client, courseId, quiz.id)
         deleted.quizzes++
       }
 
-      // 4a. Delete discussion topics (some may already be gone if they were graded discussions deleted in step 2 — 404 handled gracefully)
+      // 4a. Delete discussion topics
       const discussions = await listDiscussionTopics(client, courseId)
       for (const topic of discussions) {
         await deleteDiscussionTopic(client, courseId, topic.id)
         deleted.discussions++
       }
 
-      // 4b. Delete announcements (separate API query — Canvas doesn't return them with regular discussions)
+      // 4b. Delete announcements
       const announcements = await listAnnouncements(client, courseId)
       for (const ann of announcements) {
         await deleteDiscussionTopic(client, courseId, ann.id)
         deleted.discussions++
       }
 
-      // 5. Delete pages (front page must be unset first — Canvas forbids deleting it directly)
+      // 5. Delete pages (front page must be unset first)
       const pages = await listPages(client, courseId)
       for (const page of pages) {
         if (page.front_page) {
@@ -224,19 +229,13 @@ export function registerResetTools(
         deleted.files++
       }
 
-      // 7. Sweep any remaining rubrics (safety net for rubrics created outside our tools,
-      //    e.g. via the Canvas UI without an assignment association).
-      //    MCP-created rubrics are always assignment-associated and were already removed
-      //    in step 2 via deleteAssignment. Canvas returns 500 when deleting a rubric with
-      //    no active associations (zombie rubric). Recovery: create a temporary assignment,
-      //    associate the zombie rubric with it, delete the rubric, then delete the temp assignment.
+      // 7. Sweep any remaining rubrics
       const rubrics = await listRubrics(client, courseId)
       for (const rubric of rubrics) {
         try {
           await deleteRubric(client, courseId, rubric.id)
           deleted.rubrics++
         } catch {
-          // Zombie rubric — attempt revival via a temporary assignment association
           try {
             const tempAssignment = await createAssignment(client, courseId, {
               name: `__tmp_rubric_cleanup_${rubric.id}`,
@@ -256,7 +255,7 @@ export function registerResetTools(
         }
       }
 
-      // 8. Delete assignment groups (all should be empty; Canvas keeps at least one, so handle errors on last group)
+      // 8. Delete assignment groups
       const groups = await listAssignmentGroups(client, courseId)
       for (const group of groups) {
         try {

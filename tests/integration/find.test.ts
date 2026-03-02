@@ -87,19 +87,19 @@ const createdModuleItemIds: Array<{ moduleId: number; itemId: number }> = []
 afterAll(async () => {
   const hasCleanup = createdAssignmentIds.length + createdPageUrls.length > 0
   if (!hasCleanup) return
-  const configPath = makeTmpConfigPath()
-  makeConfig(configPath)
-  const { mcpClient } = await makeClient(configPath)
+  const { deleteAssignment } = await import('../../src/canvas/assignments.js')
+  const { deletePage } = await import('../../src/canvas/pages.js')
+  const canvasClient = new CanvasClient({ instanceUrl, apiToken })
   for (const id of createdAssignmentIds) {
     try {
-      await mcpClient.callTool({ name: 'delete_assignment', arguments: { assignment_id: id } })
+      await deleteAssignment(canvasClient, testCourseId, id)
     } catch {
       console.warn(`  Warning: failed to clean up assignment id=${id}`)
     }
   }
   for (const url of createdPageUrls) {
     try {
-      await mcpClient.callTool({ name: 'delete_page', arguments: { page_url: url } })
+      await deletePage(canvasClient, testCourseId, url)
     } catch {
       console.warn(`  Warning: failed to clean up page url=${url}`)
     }
@@ -118,8 +118,8 @@ describe('Integration: find_item — page', () => {
     // Create a page first
     const created = parseResult(
       await mcpClient.callTool({
-        name: 'create_page',
-        arguments: { title: '[MCP TEST] Find Item Page', body: '<p>Hello world</p>', published: false },
+        name: 'create_item',
+        arguments: { type: 'page', title: '[MCP TEST] Find Item Page', body: '<p>Hello world</p>', published: false },
       })
     )
     createdPageUrls.push(created.url)
@@ -153,8 +153,8 @@ describe('Integration: update_item — assignment', () => {
     // Create an assignment
     const created = parseResult(
       await mcpClient.callTool({
-        name: 'create_assignment',
-        arguments: { name: '[MCP TEST] Find Update Assignment', points_possible: 10, published: false },
+        name: 'create_item',
+        arguments: { type: 'assignment', name: '[MCP TEST] Find Update Assignment', points_possible: 10, published: false },
       })
     )
     createdAssignmentIds.push(created.id)
@@ -186,8 +186,8 @@ describe('Integration: delete_item — page', () => {
     // Create a page
     const created = parseResult(
       await mcpClient.callTool({
-        name: 'create_page',
-        arguments: { title: '[MCP TEST] Delete Item Page', body: '<p>To be deleted</p>', published: false },
+        name: 'create_item',
+        arguments: { type: 'page', title: '[MCP TEST] Delete Item Page', body: '<p>To be deleted</p>', published: false },
       })
     )
     console.log(`  Created page url=${created.url}`)
@@ -307,22 +307,23 @@ describe('Integration: delete_item — module_item', () => {
     // Create a page to add to the module
     const page = parseResult(
       await mcpClient.callTool({
-        name: 'create_page',
-        arguments: { title: '[MCP TEST] Module Item Page', body: '<p>In module</p>', published: false },
+        name: 'create_item',
+        arguments: { type: 'page', title: '[MCP TEST] Module Item Page', body: '<p>In module</p>', published: false },
       })
     )
     createdPageUrls.push(page.url)
     console.log(`  Created page url=${page.url}`)
 
-    // Add the page to the module (add_module_item requires content_id for Page type)
+    // Add the page to the module using create_item type=module_item
     const addedItem = parseResult(
       await mcpClient.callTool({
-        name: 'add_module_item',
+        name: 'create_item',
         arguments: {
-          module_id: moduleId,
-          type: 'Page',
+          type: 'module_item',
+          module_name: moduleName,
+          item_type: 'Page',
           title: '[MCP TEST] Module Item Page',
-          content_id: page.page_id,
+          content_id: page.id,
           page_url: page.url,
         },
       })
