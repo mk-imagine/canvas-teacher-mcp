@@ -1,0 +1,24 @@
+{
+  "name": "@canvas-mcp/teacher",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": { "canvas-teacher-mcp": "./dist/index.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "node --no-warnings ../../node_modules/vitest/vitest.mjs run --config vitest.config.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@canvas-mcp/core": "*",
+    "@modelcontextprotocol/sdk": "^1.27.0",
+    "handlebars": "^4.7.8",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "msw": "^2.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^2.0.0"
+  }
+}

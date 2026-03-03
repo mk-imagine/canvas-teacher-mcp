@@ -1,27 +1,18 @@
 {
-  "name": "canvas-teacher-mcp",
-  "version": "0.1.0",
-  "description": "Teacher-facing MCP server for Canvas LMS",
-  "type": "module",
-  "main": "dist/index.js",
-  "bin": {
-    "canvas-teacher-mcp": "dist/index.js"
-  },
-  "engines": {
-    "node": ">=20.0.0"
-  },
+  "name": "canvas-mcp",
+  "private": true,
+  "workspaces": ["packages/*"],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "test": "node --no-warnings node_modules/vitest/vitest.mjs run --config vitest.config.ts",
-    "test:watch": "node --no-warnings node_modules/vitest/vitest.mjs --config vitest.config.ts",
-    "test:integration": "node --no-warnings node_modules/vitest/vitest.mjs run --config vitest.integration.ts",
-    "test:integration:coverage": "node --no-warnings node_modules/vitest/vitest.mjs run --coverage --config vitest.integration.ts",
-    "test:coverage": "node --no-warnings node_modules/vitest/vitest.mjs run --coverage --config vitest.config.ts",
-    "test:coverage:all": "rm -rf coverage && npm run test:coverage && npm run test:integration:coverage && istanbul-merge --out coverage/merged.json coverage/unit/coverage-final.json coverage/integration/coverage-final.json && nyc report --reporter=text --reporter=html --temp-dir=coverage --report-dir=coverage/merged",
-    "seed": "tsx scripts/seed-test-data.ts",
-    "start": "node dist/index.js"
+    "build": "npm run build -w packages/core && npm run build -w packages/teacher",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "npm run test --workspaces --if-present",
+    "test:integration": "node --no-warnings node_modules/vitest/vitest.mjs run --config tests/vitest.config.ts",
+    "test:integration:coverage": "node --no-warnings node_modules/vitest/vitest.mjs run --coverage --config tests/vitest.config.ts",
+    "seed": "tsx scripts/seed-test-data.ts"
   },
   "devDependencies": {
+    "@canvas-mcp/core": "*",
+    "@canvas-mcp/teacher": "*",
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^2.0.0",
     "dotenv": "^16.0.0",
@@ -31,11 +22,5 @@
     "tsx": "^4.0.0",
     "typescript": "^5.0.0",
     "vitest": "^2.0.0"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.27.0",
-    "handlebars": "^4.7.8",
-    "posix-node": "^0.12.0",
-    "zod": "^4.3.6"
   }
 }

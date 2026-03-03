@@ -6,9 +6,7 @@ import { randomBytes } from 'node:crypto'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { CanvasClient } from '../../src/canvas/client.js'
-import { ConfigManager } from '../../src/config/manager.js'
-import { registerContextTools } from '../../src/tools/context.js'
+import { CanvasClient, ConfigManager, registerContextTools } from '@canvas-mcp/core'
 
 const instanceUrl = process.env.CANVAS_INSTANCE_URL!
 const apiToken = process.env.CANVAS_API_TOKEN!

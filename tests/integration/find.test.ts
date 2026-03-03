@@ -6,12 +6,10 @@ import { randomBytes } from 'node:crypto'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { CanvasClient } from '../../src/canvas/client.js'
-import { ConfigManager } from '../../src/config/manager.js'
-import { SecureStore } from '../../src/security/secure-store.js'
-import { registerFindTools } from '../../src/tools/find.js'
-import { registerReportingTools } from '../../src/tools/reporting.js'
-import { registerContentTools } from '../../src/tools/content.js'
+import { CanvasClient, ConfigManager, SecureStore } from '@canvas-mcp/core'
+import { registerFindTools } from '../../packages/teacher/src/tools/find.js'
+import { registerReportingTools } from '../../packages/teacher/src/tools/reporting.js'
+import { registerContentTools } from '../../packages/teacher/src/tools/content.js'
 
 const instanceUrl = process.env.CANVAS_INSTANCE_URL!
 const apiToken = process.env.CANVAS_API_TOKEN!
