@@ -8,26 +8,47 @@
  * Uses student tokens ONLY for submitting assignments and the exit card quiz.
  * After the seed runs, all subsequent integration tests use the teacher token only.
  *
- * See Section 13.2 of PLANNING.md for the full seed state table.
+ * Refactored to use @canvas-mcp/core components for the current monorepo structure.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { config } from 'dotenv'
 
+// We import from the source to avoid needing a build step for scripts,
+// and to match how vitest handles the workspace.
+import { 
+  CanvasClient, 
+  createAssignment, 
+  createQuiz, 
+  createQuizQuestion, 
+  createModule, 
+  createModuleItem,
+  updateModule,
+  listModules,
+  listAssignments,
+  listQuizzes,
+  listPages,
+  updatePage,
+  deleteModule,
+  deleteAssignment,
+  deleteQuiz,
+  deletePage
+} from '../packages/core/src/index.js'
+
 config({ path: resolve(process.cwd(), '.env.test') })
 
 // ─── Environment ──────────────────────────────────────────────────────────────
 
 const BASE_URL = process.env.CANVAS_INSTANCE_URL!
-const TEACHER = process.env.CANVAS_API_TOKEN!
-const COURSE_ID = process.env.CANVAS_TEST_COURSE_ID!
+const TEACHER_TOKEN = process.env.CANVAS_API_TOKEN!
+const COURSE_ID = parseInt(process.env.CANVAS_TEST_COURSE_ID!)
 const STUDENT_TOKENS = [0, 1, 2, 3, 4].map((n) => process.env[`STUDENT${n}_API_TOKEN`]!)
 
 const missing = [
   ['CANVAS_INSTANCE_URL', BASE_URL],
-  ['CANVAS_API_TOKEN', TEACHER],
-  ['CANVAS_TEST_COURSE_ID', COURSE_ID],
+  ['CANVAS_API_TOKEN', TEACHER_TOKEN],
+  ['CANVAS_TEST_COURSE_ID', process.env.CANVAS_TEST_COURSE_ID],
   ...STUDENT_TOKENS.map((t, i) => [`STUDENT${i}_API_TOKEN`, t]),
 ].filter(([, v]) => !v).map(([k]) => k)
 
@@ -35,6 +56,9 @@ if (missing.length > 0) {
   console.error(`❌  Missing .env.test variables: ${missing.join(', ')}`)
   process.exit(1)
 }
+
+const teacherClient = new CanvasClient({ instanceUrl: BASE_URL, apiToken: TEACHER_TOKEN })
+const studentClients = STUDENT_TOKENS.map(token => new CanvasClient({ instanceUrl: BASE_URL, apiToken: token }))
 
 // ─── Date constants ───────────────────────────────────────────────────────────
 
@@ -44,20 +68,6 @@ const oneWeekFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOStrin
 const oneYearFromNow = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
 
 // ─── Seed table ───────────────────────────────────────────────────────────────
-//
-// Per-student: [a1, a2, a3, submitExitCard]
-// Grade values: number = submit + grade, null = submit (ungraded), undefined = not submitted
-//
-// A1 due 2 weeks ago (past) — all submissions are late
-// A2 due 1 week ago (past)  — all submissions are late
-// A3 due 1 week from now    — submissions are on-time; non-submissions are NOT yet missing
-// Exit card due 2 weeks ago — submissions are late; auto-graded by Canvas (graded_survey)
-//
-// Student 1: A1=late+graded(10), A2=late+graded(8),  A3=on-time+ungraded, Exit=submitted
-// Student 2: A1=late+graded(7),  A2=missing,          A3=on-time+graded(9), Exit=missing
-// Student 3: A1=late+graded(9),  A2=late+graded(10),  A3=not-yet-due,       Exit=submitted
-// Student 4: A1=missing,         A2=missing,           A3=not-yet-due,       Exit=missing
-// Student 5: A1=late+graded(5),  A2=late+ungraded,     A3=on-time+graded(0), Exit=submitted
 
 type Grade = number | null | undefined
 
@@ -69,62 +79,12 @@ const SEED: Array<[Grade, Grade, Grade, boolean]> = [
   [5,  null,      0,         true],   // Student 5
 ]
 
-// ─── HTTP helpers ─────────────────────────────────────────────────────────────
-
-function makeHeaders(token: string) {
-  return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-}
-
-async function canvasGet<T>(token: string, path: string): Promise<T[]> {
-  let url: string | null = `${BASE_URL}/api/v1${path}`
-  const results: T[] = []
-  while (url) {
-    const res = await fetch(url, { headers: makeHeaders(token) })
-    if (!res.ok) throw new Error(`GET ${path} → ${res.status}: ${await res.text()}`)
-    results.push(...(await res.json() as T[]))
-    const next = res.headers.get('link')?.match(/<([^>]+)>;\s*rel="next"/)
-    url = next?.[1] ?? null
-  }
-  return results
-}
-
-async function canvasPost<T>(token: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BASE_URL}/api/v1${path}`, {
-    method: 'POST',
-    headers: makeHeaders(token),
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  })
-  if (!res.ok) throw new Error(`POST ${path} → ${res.status}: ${await res.text()}`)
-  return res.json() as Promise<T>
-}
-
-async function canvasPut<T>(token: string, path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE_URL}/api/v1${path}`, {
-    method: 'PUT',
-    headers: makeHeaders(token),
-    body: JSON.stringify(body),
-  })
-  if (!res.ok) throw new Error(`PUT ${path} → ${res.status}: ${await res.text()}`)
-  return res.json() as Promise<T>
-}
-
-async function canvasDelete(token: string, path: string): Promise<void> {
-  const res = await fetch(`${BASE_URL}/api/v1${path}`, {
-    method: 'DELETE',
-    headers: makeHeaders(token),
-  })
-  if (!res.ok && res.status !== 404) {
-    throw new Error(`DELETE ${path} → ${res.status}: ${await res.text()}`)
-  }
-}
-
 // ─── Step 1: Get student Canvas user IDs ─────────────────────────────────────
 
 async function getStudentIds(): Promise<number[]> {
   const users = await Promise.all(
-    STUDENT_TOKENS.map((token) =>
-      fetch(`${BASE_URL}/api/v1/users/self`, { headers: makeHeaders(token) })
-        .then((r) => r.json() as Promise<{ id: number; name: string }>)
+    studentClients.map((client) =>
+      client.getOne<{ id: number; name: string }>('/api/v1/users/self')
     )
   )
   users.forEach((u, i) => console.log(`    Student ${i + 1}: ${u.name} (id: ${u.id})`))
@@ -132,53 +92,35 @@ async function getStudentIds(): Promise<number[]> {
 }
 
 // ─── Step 1.5: Set locale to US English for all accounts ─────────────────────
-//
-// canvas.instructure.com may default to a non-English locale for accounts that
-// were created without an explicit locale (e.g., via API or sign-up without
-// selecting a language). Each account can only update its own locale, so we use
-// each token individually. Idempotent — safe to run on every seed.
 
 async function setLocales(studentIds: number[]): Promise<void> {
   const TARGET = 'en'
 
-  // Teacher: already fetching self for their ID, check locale at the same time
-  const teacherSelf = await fetch(`${BASE_URL}/api/v1/users/self`, {
-    headers: makeHeaders(TEACHER),
-  }).then((r) => r.json() as Promise<{ id: number; locale: string | null }>)
+  const teacherSelf = await teacherClient.getOne<{ id: number; locale: string | null }>('/api/v1/users/self')
 
   if (teacherSelf.locale === TARGET) {
     console.log(`    Teacher (id: ${teacherSelf.id}): locale already '${TARGET}' ✓`)
   } else {
-    await canvasPut(TEACHER, `/users/${teacherSelf.id}`, { user: { locale: TARGET } })
+    await teacherClient.put(`/api/v1/users/${teacherSelf.id}`, { user: { locale: TARGET } })
     console.log(`    Teacher (id: ${teacherSelf.id}): locale '${teacherSelf.locale ?? 'unset'}' → '${TARGET}'`)
   }
 
-  // Students: fetch each profile with their own token to check current locale
-  for (let i = 0; i < STUDENT_TOKENS.length; i++) {
-    const student = await fetch(`${BASE_URL}/api/v1/users/self`, {
-      headers: makeHeaders(STUDENT_TOKENS[i]),
-    }).then((r) => r.json() as Promise<{ locale: string | null }>)
+  for (let i = 0; i < studentClients.length; i++) {
+    const student = await studentClients[i].getOne<{ locale: string | null }>('/api/v1/users/self')
 
     if (student.locale === TARGET) {
       console.log(`    Student ${i + 1} (id: ${studentIds[i]}): locale already '${TARGET}' ✓`)
     } else {
-      await canvasPut(STUDENT_TOKENS[i], `/users/${studentIds[i]}`, { user: { locale: TARGET } })
+      await studentClients[i].put(`/api/v1/users/${studentIds[i]}`, { user: { locale: TARGET } })
       console.log(`    Student ${i + 1} (id: ${studentIds[i]}): locale '${student.locale ?? 'unset'}' → '${TARGET}'`)
     }
   }
 }
 
 // ─── Step 2: Verify course is published ──────────────────────────────────────
-//
-// canvas.instructure.com free accounts cannot publish courses via the API (403).
-// The course must be published manually in the Canvas UI before running this script.
-// Course Settings → (right sidebar) → Publish button
 
 async function verifyPublished(): Promise<void> {
-  const res = await fetch(`${BASE_URL}/api/v1/courses/${COURSE_ID}`, {
-    headers: makeHeaders(TEACHER),
-  })
-  const course = (await res.json()) as { workflow_state: string; name: string }
+  const course = await teacherClient.getOne<{ workflow_state: string; name: string }>(`/api/v1/courses/${COURSE_ID}`)
   if (course.workflow_state === 'available') {
     console.log('    Course is published ✓')
     return
@@ -196,9 +138,9 @@ async function verifyPublished(): Promise<void> {
 
 async function acceptEnrollments(studentIds: number[]): Promise<void> {
   for (let i = 0; i < studentIds.length; i++) {
-    const enrollments = await canvasGet<{ id: number; enrollment_state: string }>(
-      TEACHER,
-      `/courses/${COURSE_ID}/enrollments?user_id=${studentIds[i]}`
+    const enrollments = await teacherClient.get<{ id: number; enrollment_state: string }>(
+      `/api/v1/courses/${COURSE_ID}/enrollments`, 
+      { user_id: String(studentIds[i]) }
     )
 
     if (enrollments.length === 0) {
@@ -209,7 +151,7 @@ async function acceptEnrollments(studentIds: number[]): Promise<void> {
     const { id, enrollment_state } = enrollments[0]
 
     if (enrollment_state === 'invited') {
-      await canvasPost(STUDENT_TOKENS[i], `/courses/${COURSE_ID}/enrollments/${id}/accept`)
+      await studentClients[i].post(`/api/v1/courses/${COURSE_ID}/enrollments/${id}/accept`, {})
       console.log(`    Student ${i + 1}: accepted enrollment ${id}`)
     } else if (enrollment_state === 'active') {
       console.log(`    Student ${i + 1}: enrollment active ✓`)
@@ -227,27 +169,23 @@ async function acceptEnrollments(studentIds: number[]): Promise<void> {
 
 async function resetCourse(): Promise<void> {
   const [modules, assignments, quizzes, pages] = await Promise.all([
-    canvasGet<{ id: number }>(TEACHER, `/courses/${COURSE_ID}/modules`),
-    canvasGet<{ id: number }>(TEACHER, `/courses/${COURSE_ID}/assignments`),
-    canvasGet<{ id: number }>(TEACHER, `/courses/${COURSE_ID}/quizzes`),
-    canvasGet<{ url: string; front_page: boolean }>(TEACHER, `/courses/${COURSE_ID}/pages`),
+    listModules(teacherClient, COURSE_ID),
+    listAssignments(teacherClient, COURSE_ID),
+    listQuizzes(teacherClient, COURSE_ID),
+    listPages(teacherClient, COURSE_ID),
   ])
 
-  // Canvas forbids deleting the front page directly.
-  // Unset any front page designation first, then delete.
   const frontPages = pages.filter((p) => p.front_page)
   for (const page of frontPages) {
-    await canvasPut(TEACHER, `/courses/${COURSE_ID}/pages/${page.url}`, {
-      wiki_page: { front_page: false },
-    })
+    await updatePage(teacherClient, COURSE_ID, page.url, { front_page: false })
     console.log(`    Removed front page designation from: ${page.url}`)
   }
 
   await Promise.all([
-    ...modules.map((m) => canvasDelete(TEACHER, `/courses/${COURSE_ID}/modules/${m.id}`)),
-    ...assignments.map((a) => canvasDelete(TEACHER, `/courses/${COURSE_ID}/assignments/${a.id}`)),
-    ...quizzes.map((q) => canvasDelete(TEACHER, `/courses/${COURSE_ID}/quizzes/${q.id}`)),
-    ...pages.map((p) => canvasDelete(TEACHER, `/courses/${COURSE_ID}/pages/${p.url}`)),
+    ...modules.map((m) => deleteModule(teacherClient, COURSE_ID, m.id)),
+    ...assignments.map((a) => deleteAssignment(teacherClient, COURSE_ID, a.id)),
+    ...quizzes.map((q) => deleteQuiz(teacherClient, COURSE_ID, q.id)),
+    ...pages.map((p) => deletePage(teacherClient, COURSE_ID, p.url)),
   ])
 
   console.log(
@@ -265,21 +203,17 @@ interface SeedContent {
 }
 
 async function createContent(): Promise<SeedContent> {
-  // Use the first available assignment group (Canvas always creates a default one)
-  const groups = await canvasGet<{ id: number; name: string }>(
-    TEACHER,
-    `/courses/${COURSE_ID}/assignment_groups`
+  const groups = await teacherClient.get<{ id: number; name: string }>(
+    `/api/v1/courses/${COURSE_ID}/assignment_groups`
   )
   const groupId =
     groups[0]?.id ??
     (
-      await canvasPost<{ id: number }>(TEACHER, `/courses/${COURSE_ID}/assignment_groups`, {
+      await teacherClient.post<{ id: number }>(`/api/v1/courses/${COURSE_ID}/assignment_groups`, {
         assignment_group: { name: 'Assignments' },
       })
     ).id
 
-  // Create 3 assignments with different due dates (sequential — Canvas can have issues with parallel creation)
-  // lock_at is set far in the future so Canvas doesn't auto-lock when due_at is in the past.
   const assignmentBase = {
     points_possible: 10,
     lock_at: oneYearFromNow,
@@ -288,59 +222,49 @@ async function createContent(): Promise<SeedContent> {
     published: true,
   }
 
-  const a1 = await canvasPost<{ id: number }>(TEACHER, `/courses/${COURSE_ID}/assignments`, {
-    assignment: { ...assignmentBase, name: 'Week 1 | Assignment 1.1 | Seed Assignment A', due_at: twoWeeksAgo },
+  const a1 = await createAssignment(teacherClient, COURSE_ID, { 
+    ...assignmentBase, name: 'Week 1 | Assignment 1.1 | Seed Assignment A', due_at: twoWeeksAgo 
   })
-  const a2 = await canvasPost<{ id: number }>(TEACHER, `/courses/${COURSE_ID}/assignments`, {
-    assignment: { ...assignmentBase, name: 'Week 1 | Assignment 1.2 | Seed Assignment B', due_at: oneWeekAgo },
+  const a2 = await createAssignment(teacherClient, COURSE_ID, { 
+    ...assignmentBase, name: 'Week 1 | Assignment 1.2 | Seed Assignment B', due_at: oneWeekAgo 
   })
-  const a3 = await canvasPost<{ id: number }>(TEACHER, `/courses/${COURSE_ID}/assignments`, {
-    assignment: { ...assignmentBase, name: 'Week 1 | Assignment 1.3 | Seed Assignment C', due_at: oneWeekFromNow },
+  const a3 = await createAssignment(teacherClient, COURSE_ID, { 
+    ...assignmentBase, name: 'Week 1 | Assignment 1.3 | Seed Assignment C', due_at: oneWeekFromNow 
   })
   console.log(`    Created assignments: ${a1.id} (due 2wk ago), ${a2.id} (due 1wk ago), ${a3.id} (due 1wk from now)`)
 
-  // Create exit card quiz (Canvas returns 200, not 201, for quiz creation)
-  const exitCard = await canvasPost<{ id: number }>(TEACHER, `/courses/${COURSE_ID}/quizzes`, {
-    quiz: {
-      title: 'Week 1 | Exit Card',
-      quiz_type: 'graded_survey',
-      points_possible: 1,
-      due_at: twoWeeksAgo,
-      published: true,
-    },
+  const exitCard = await createQuiz(teacherClient, COURSE_ID, {
+    title: 'Week 1 | Exit Card',
+    quiz_type: 'graded_survey',
+    points_possible: 1,
+    due_at: twoWeeksAgo,
+    published: true,
   })
 
-  // Add a question so the quiz can be submitted
-  await canvasPost(TEACHER, `/courses/${COURSE_ID}/quizzes/${exitCard.id}/questions`, {
-    question: {
-      question_name: 'Reflection',
-      question_text: 'What was the most valuable thing you learned this week?',
-      question_type: 'essay_question',
-      points_possible: 0,
-    },
+  await createQuizQuestion(teacherClient, COURSE_ID, exitCard.id, {
+    question_name: 'Reflection',
+    question_text: 'What was the most valuable thing you learned this week?',
+    question_type: 'essay_question',
+    points_possible: 0,
   })
   console.log(`    Created exit card quiz: ${exitCard.id}`)
 
-  // Create module and add all items.
-  // Canvas ignores published:true on POST — always creates modules as unpublished.
-  // A separate PUT is required to publish after items are added.
-  const module = await canvasPost<{ id: number }>(TEACHER, `/courses/${COURSE_ID}/modules`, {
-    module: { name: 'Week 1: Test Module' },
+  const module = await createModule(teacherClient, COURSE_ID, { name: 'Week 1: Test Module' })
+
+  await createModuleItem(teacherClient, COURSE_ID, module.id, { 
+    type: 'Assignment', content_id: a1.id, title: 'Week 1 | Assignment 1.1 | Seed Assignment A' 
+  })
+  await createModuleItem(teacherClient, COURSE_ID, module.id, { 
+    type: 'Assignment', content_id: a2.id, title: 'Week 1 | Assignment 1.2 | Seed Assignment B' 
+  })
+  await createModuleItem(teacherClient, COURSE_ID, module.id, { 
+    type: 'Assignment', content_id: a3.id, title: 'Week 1 | Assignment 1.3 | Seed Assignment C' 
+  })
+  await createModuleItem(teacherClient, COURSE_ID, module.id, { 
+    type: 'Quiz', content_id: exitCard.id, title: 'Week 1 | Exit Card' 
   })
 
-  const addItem = (type: string, contentId: number, title: string) =>
-    canvasPost(TEACHER, `/courses/${COURSE_ID}/modules/${module.id}/items`, {
-      module_item: { type, content_id: contentId, title },
-    })
-
-  await addItem('Assignment', a1.id, 'Week 1 | Assignment 1.1 | Seed Assignment A')
-  await addItem('Assignment', a2.id, 'Week 1 | Assignment 1.2 | Seed Assignment B')
-  await addItem('Assignment', a3.id, 'Week 1 | Assignment 1.3 | Seed Assignment C')
-  await addItem('Quiz', exitCard.id, 'Week 1 | Exit Card')
-
-  await canvasPut(TEACHER, `/courses/${COURSE_ID}/modules/${module.id}`, {
-    module: { published: true },
-  })
+  await updateModule(teacherClient, COURSE_ID, module.id, { published: true })
   console.log(`    Created and published module: ${module.id}`)
 
   return { assignmentIds: [a1.id, a2.id, a3.id], exitCardId: exitCard.id, moduleId: module.id }
@@ -351,50 +275,34 @@ async function createContent(): Promise<SeedContent> {
 async function verifyStudentAccess(content: SeedContent): Promise<void> {
   const firstId = content.assignmentIds[0]
 
-  for (let i = 0; i < STUDENT_TOKENS.length; i++) {
-    const token = STUDENT_TOKENS[i]
+  for (let i = 0; i < studentClients.length; i++) {
+    const client = studentClients[i]
 
-    const courseRes = await fetch(`${BASE_URL}/api/v1/courses/${COURSE_ID}`, {
-      headers: makeHeaders(token),
-    })
+    try {
+      await client.getOne(`/api/v1/courses/${COURSE_ID}`)
+      const assign = await client.getOne<{
+        locked_for_user: boolean
+        lock_explanation?: string
+        submission_types: string[]
+        workflow_state: string
+      }>(`/api/v1/courses/${COURSE_ID}/assignments/${firstId}`)
 
-    if (!courseRes.ok) {
-      console.warn(
-        `    Student ${i + 1}: ✗ course → ${courseRes.status} ${await courseRes.text()}`
+      const lockStr = assign.locked_for_user
+        ? `LOCKED — ${assign.lock_explanation ?? 'no explanation'}`
+        : 'not locked'
+
+      console.log(
+        `    Student ${i + 1}: ✓ course | ✓ assignment (${assign.workflow_state}) | ` +
+          `locked_for_user=${assign.locked_for_user} | types=[${assign.submission_types.join(', ')}]`
       )
-      continue
-    }
 
-    const assignRes = await fetch(
-      `${BASE_URL}/api/v1/courses/${COURSE_ID}/assignments/${firstId}`,
-      { headers: makeHeaders(token) }
-    )
-
-    if (!assignRes.ok) {
+      if (assign.locked_for_user) {
+        console.warn(`             ${lockStr}`)
+      }
+    } catch (err) {
       console.warn(
-        `    Student ${i + 1}: ✓ course | ✗ assignment → ${assignRes.status} ${await assignRes.text()}`
+        `    Student ${i + 1}: ✗ access failed → ${(err as Error).message}`
       )
-      continue
-    }
-
-    const assign = (await assignRes.json()) as {
-      locked_for_user: boolean
-      lock_explanation?: string
-      submission_types: string[]
-      workflow_state: string
-    }
-
-    const lockStr = assign.locked_for_user
-      ? `LOCKED — ${assign.lock_explanation ?? 'no explanation'}`
-      : 'not locked'
-
-    console.log(
-      `    Student ${i + 1}: ✓ course | ✓ assignment (${assign.workflow_state}) | ` +
-        `locked_for_user=${assign.locked_for_user} | types=[${assign.submission_types.join(', ')}]`
-    )
-
-    if (assign.locked_for_user) {
-      console.warn(`             ${lockStr}`)
     }
   }
 }
@@ -408,7 +316,7 @@ async function submitAndGrade(content: SeedContent, studentIds: number[]): Promi
     const [g1, g2, g3, submitExit] = SEED[si]
     const grades: Grade[] = [g1, g2, g3]
     const studentId = studentIds[si]
-    const studentToken = STUDENT_TOKENS[si]
+    const studentClient = studentClients[si]
 
     for (let ai = 0; ai < assignmentIds.length; ai++) {
       const grade = grades[ai]
@@ -417,20 +325,18 @@ async function submitAndGrade(content: SeedContent, studentIds: number[]): Promi
         continue
       }
 
-      await canvasPost(studentToken, `/courses/${COURSE_ID}/assignments/${assignmentIds[ai]}/submissions`, {
+      await studentClient.post(`/api/v1/courses/${COURSE_ID}/assignments/${assignmentIds[ai]}/submissions`, {
         submission: {
           submission_type: 'online_url',
           url: `https://colab.research.google.com/seed-s${si + 1}-a${ai + 1}`,
         },
       })
 
-      // A3 (index 2) is due in the future, so its submissions are on-time
       const timing = ai < 2 ? 'late' : 'on-time'
 
       if (grade !== null) {
-        await canvasPut(
-          TEACHER,
-          `/courses/${COURSE_ID}/assignments/${assignmentIds[ai]}/submissions/${studentId}`,
+        await teacherClient.put(
+          `/api/v1/courses/${COURSE_ID}/assignments/${assignmentIds[ai]}/submissions/${studentId}`,
           { submission: { posted_grade: String(grade) } }
         )
         console.log(`    Student ${si + 1} → A${ai + 1}: submitted + graded ${grade}/10 (${timing})`)
@@ -439,27 +345,24 @@ async function submitAndGrade(content: SeedContent, studentIds: number[]): Promi
       }
     }
 
-    // Exit card quiz submission
     if (!submitExit) {
       console.log(`    Student ${si + 1} → Exit Card: not submitted`)
       continue
     }
 
     try {
-      const quizSub = await canvasPost<{
+      const quizSub = await studentClient.post<{
         quiz_submissions: Array<{ id: number; attempt: number; validation_token: string }>
-      }>(studentToken, `/courses/${COURSE_ID}/quizzes/${exitCardId}/submissions`)
+      }>(`/api/v1/courses/${COURSE_ID}/quizzes/${exitCardId}/submissions`, {})
 
       const { id: subId, attempt, validation_token } = quizSub.quiz_submissions[0]
 
-      await canvasPost(
-        studentToken,
-        `/courses/${COURSE_ID}/quizzes/${exitCardId}/submissions/${subId}/complete`,
+      await studentClient.post(
+        `/api/v1/courses/${COURSE_ID}/quizzes/${exitCardId}/submissions/${subId}/complete`,
         { attempt, validation_token }
       )
       console.log(`    Student ${si + 1} → Exit Card: submitted`)
     } catch (err) {
-      // Non-fatal: exit card submission failure doesn't block reporting tests
       console.warn(
         `    Student ${si + 1} → Exit Card: submission failed — ${(err as Error).message}`
       )
@@ -468,9 +371,6 @@ async function submitAndGrade(content: SeedContent, studentIds: number[]): Promi
 }
 
 // ─── Write seed IDs back to .env.test ────────────────────────────────────────
-//
-// Integration tests reference these IDs to avoid hardcoding them.
-// The seed script writes them automatically after each run.
 
 function writeSeedIds(content: SeedContent, studentIds: number[]): void {
   const envPath = resolve(process.cwd(), '.env.test')

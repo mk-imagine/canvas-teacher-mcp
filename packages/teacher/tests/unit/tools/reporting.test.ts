@@ -119,30 +119,24 @@ function getContent(result: ToolResult): ContentBlock[] {
   return result.content as ContentBlock[]
 }
 
-/** Parses content[0].text as JSON (assistant-audience blinded data). */
+/** Parses content[0].text as JSON (assistant-audience blinded data — tokens only). */
 function parseBlindedResult(result: ToolResult) {
   return JSON.parse(getContent(result)[0].text)
 }
 
-/** Returns content[1].text (user-audience lookup table). */
+/** Parses content[1].text as JSON (user-audience unblinded data — real names). */
+function parseUserResult(result: ToolResult) {
+  return JSON.parse(getContent(result)[1].text)
+}
+
+/** Returns content[1].text raw string (user-audience). */
 function getUserText(result: ToolResult): string {
   return getContent(result)[1].text
 }
 
-/** Legacy helper for non-blinded tools. */
+/** Helper for non-blinded tools that return a single JSON block. */
 function parseResult(result: ToolResult) {
   return JSON.parse(getContent(result)[0].text)
-}
-
-/**
- * Finds the session token for a student by display name from the lookup table.
- * Lookup table format: "Student lookup (current session):\n[STUDENT_001] → Jane Smith\n..."
- */
-function getStudentToken(userText: string, name: string): string | undefined {
-  for (const line of userText.split('\n').slice(1)) {
-    const match = line.match(/^(\[STUDENT_\d{3}\]) → (.+)$/)
-    if (match && match[2] === name) return match[1]
-  }
 }
 
 // ─── get_module_summary ────────────────────────────────────────────────────────
@@ -266,42 +260,38 @@ describe('get_grades — scope=class', () => {
     expect(data.students[0].missing_count).toBeDefined()
     expect(blocks[0].text).not.toContain('Jane Smith')
     expect(blocks[0].text).not.toContain('Bob Adams')
-    // User block: real names visible
+    // User block: real names in JSON, no tokens
     const userText = getUserText(result)
     expect(userText).toContain('Jane Smith')
     expect(userText).toContain('Bob Adams')
+    expect(userText).not.toMatch(/\[STUDENT_\d{3}\]/)
   })
 
   it('sorts by engagement (missing DESC)', async () => {
     const configPath = makeTmpConfigPath()
     writeConfig(configPath)
-    const store = new SecureStore()
-    const { mcpClient } = await makeTestClient(configPath, store)
+    const { mcpClient } = await makeTestClient(configPath)
     const result = await mcpClient.callTool({
       name: 'get_grades',
       arguments: { scope: 'class', sort_by: 'engagement' },
     })
-    const data = parseBlindedResult(result)
     // Bob has 1 missing, Jane has 0 → Bob first
-    const userText = getUserText(result)
-    const bobToken = getStudentToken(userText, 'Bob Adams')
-    expect(data.students[0].student).toBe(bobToken)
+    // Verify via user-facing block (real names, same order)
+    const userData = parseUserResult(result)
+    expect(userData.students[0].student).toBe('Bob Adams')
   })
 
   it('sorts by grade (score ASC)', async () => {
     const configPath = makeTmpConfigPath()
     writeConfig(configPath)
-    const store = new SecureStore()
-    const { mcpClient } = await makeTestClient(configPath, store)
+    const { mcpClient } = await makeTestClient(configPath)
     const result = await mcpClient.callTool({
       name: 'get_grades',
       arguments: { scope: 'class', sort_by: 'grade' },
     })
-    const data = parseBlindedResult(result)
-    // Bob has 60, Jane has 87.4 -> Bob first
-    const userText = getUserText(result)
-    const bobToken = getStudentToken(userText, 'Bob Adams')
-    expect(data.students[0].student).toBe(bobToken)
+    // Bob has 60, Jane has 87.4 → Bob first
+    const userData = parseUserResult(result)
+    expect(userData.students[0].student).toBe('Bob Adams')
   })
 
   it('sorts by zeros (zeros DESC)', async () => {
@@ -314,17 +304,14 @@ describe('get_grades — scope=class', () => {
         HttpResponse.json([janeZero, MOCK_SUBMISSIONS[1], MOCK_SUBMISSIONS[2]])
       )
     )
-    const store = new SecureStore()
-    const { mcpClient } = await makeTestClient(configPath, store)
+    const { mcpClient } = await makeTestClient(configPath)
     const result = await mcpClient.callTool({
       name: 'get_grades',
       arguments: { scope: 'class', sort_by: 'zeros' },
     })
-    const data = parseBlindedResult(result)
-    // Jane has 1 zero, Bob has 0 -> Jane first
-    const userText = getUserText(result)
-    const janeToken = getStudentToken(userText, 'Jane Smith')
-    expect(data.students[0].student).toBe(janeToken)
+    // Jane has 1 zero, Bob has 0 → Jane first
+    const userData = parseUserResult(result)
+    expect(userData.students[0].student).toBe('Jane Smith')
   })
 
   it('filters by assignment_group_id', async () => {
@@ -395,17 +382,12 @@ describe('get_grades — scope=class sorting', () => {
       arguments: { scope: 'class', sort_by: 'engagement' },
     })
 
-    const data = parseBlindedResult(result)
-    const userText = getUserText(result)
-    const aliceToken = getStudentToken(userText, 'A Alice Jones')
-    const bobToken = getStudentToken(userText, 'B Bob Adams')
-    const janeToken = getStudentToken(userText, 'C Jane Smith')
-
     // All have 0 missing, 0 late.
     // Alice and Jane have null scores, Bob has 60.
     // With engagement sort, null scores should come first, sorted by name.
     // So order should be Alice (null), Jane (null), Bob (60)
-    expect(data.students.map((s: any) => s.student)).toEqual([aliceToken, janeToken, bobToken])
+    const userData = parseUserResult(result)
+    expect(userData.students.map((s: any) => s.student)).toEqual(['A Alice Jones', 'C Jane Smith', 'B Bob Adams'])
   });
 
   it('sorts by grade with null scores', async () => {
@@ -446,15 +428,10 @@ describe('get_grades — scope=class sorting', () => {
         arguments: { scope: 'class', sort_by: 'grade' },
     })
 
-    const data = parseBlindedResult(result)
-    const userText = getUserText(result)
-    const aliceToken = getStudentToken(userText, 'A Alice Jones')
-    const bobToken = getStudentToken(userText, 'B Bob Adams')
-    const janeToken = getStudentToken(userText, 'C Jane Smith')
-
     // grade sort is score ASC. nulls first, then by score.
     // Order should be Alice (null), Bob (60), Jane (80)
-    expect(data.students.map((s: any) => s.student)).toEqual([aliceToken, bobToken, janeToken])
+    const userData = parseUserResult(result)
+    expect(userData.students.map((s: any) => s.student)).toEqual(['A Alice Jones', 'B Bob Adams', 'C Jane Smith'])
   })
 })
 
@@ -494,9 +471,10 @@ describe('get_grades — scope=assignment', () => {
     expect(data.summary.missing).toBe(1)
     expect(blocks[0].text).not.toContain('Jane Smith')
     expect(blocks[0].text).not.toContain('Bob Adams')
-    // User block: real names visible
+    // User block: real names in JSON, no tokens
     const userText = getUserText(result)
     expect(userText).toContain('Jane Smith')
+    expect(userText).not.toMatch(/\[STUDENT_\d{3}\]/)
   })
 })
 
@@ -536,9 +514,10 @@ describe('get_grades — scope=student', () => {
     expect(data.current_score).toBe(87.4)
     expect(data.assignments.length).toBeGreaterThan(0)
     expect(blocks[0].text).not.toContain('Jane Smith')
-    // User block: lookup table present
+    // User block: real names in JSON, no tokens
     const userText = getUserText(result)
     expect(userText).toContain('Jane Smith')
+    expect(userText).not.toMatch(/\[STUDENT_\d{3}\]/)
   })
 
   it('returns error for unknown token', async () => {
@@ -630,9 +609,10 @@ describe('get_submission_status — type=missing', () => {
     expect(data.students[0].missing_count).toBe(1)
     expect(blocks[0].text).not.toContain('Bob Adams')
     expect(blocks[0].text).not.toContain('Jane Smith')
-    // User block: real names visible
+    // User block: real names in JSON, no tokens
     const userText = getUserText(result)
     expect(userText).toContain('Bob Adams')
+    expect(userText).not.toMatch(/\[STUDENT_\d{3}\]/)
   })
 
   it('filters missing assignments with since_date', async () => {
@@ -655,9 +635,8 @@ describe('get_submission_status — type=missing', () => {
     const data = parseBlindedResult(result)
     expect(data.total_missing_submissions).toBe(1)
     expect(data.students).toHaveLength(1)
-    const userText = getUserText(result)
-    const janeToken = getStudentToken(userText, 'Jane Smith')
-    expect(data.students[0].student).toBe(janeToken)
+    const userData = parseUserResult(result)
+    expect(userData.students[0].student).toBe('Jane Smith')
   })
 
   it('sorts missing assignments with null due dates', async () => {
@@ -724,9 +703,10 @@ describe('get_submission_status — type=late', () => {
     expect(data.students[0].late_count).toBe(1)
     expect(blocks[0].text).not.toContain('Jane Smith')
     expect(blocks[0].text).not.toContain('Bob Adams')
-    // User block: real names visible
+    // User block: real names in JSON, no tokens
     const userText = getUserText(result)
     expect(userText).toContain('Jane Smith')
+    expect(userText).not.toMatch(/\[STUDENT_\d{3}\]/)
   })
 
   it('sorts late assignments with null submitted_at dates', async () => {
@@ -910,6 +890,166 @@ describe('get_module_summary — module_name', () => {
   })
 })
 
+// ─── FERPA blinding — MCP protocol compliance ─────────────────────────────────
+//
+// These tests verify MCP audience annotation compliance:
+//   content[0] audience=['assistant'] — only tokens, no real names → safe for AI context
+//   content[1] audience=['user']      — real names, no tokens → shown in client UI
+//
+// If these tests pass, the MCP client can be verified correct: a client that properly
+// filters audience annotations will expose only blinded data to the model, while the
+// user sees the full unblinded view. Failure indicates a regression in the blinding
+// contract that could result in PII being sent to the AI model.
+
+describe('FERPA blinding — MCP protocol compliance', () => {
+  beforeEach(() => {
+    mswServer.use(
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/enrollments`, () =>
+        HttpResponse.json(MOCK_ENROLLMENTS)
+      ),
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/students/submissions`, () =>
+        HttpResponse.json(MOCK_SUBMISSIONS)
+      ),
+    )
+  })
+
+  it('content[0] has audience=[assistant] and contains only tokens, no real names', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath)
+    const { mcpClient } = await makeTestClient(configPath)
+    const result = await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'class' } })
+    const block = getContent(result)[0]
+
+    expect(block.annotations?.audience).toEqual(['assistant'])
+    expect(block.text).toMatch(/\[STUDENT_\d{3}\]/)
+    expect(block.text).not.toContain('Jane Smith')
+    expect(block.text).not.toContain('Bob Adams')
+    expect(() => JSON.parse(block.text)).not.toThrow()
+  })
+
+  it('content[1] has audience=[user] and contains real names, no tokens', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath)
+    const { mcpClient } = await makeTestClient(configPath)
+    const result = await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'class' } })
+    const block = getContent(result)[1]
+
+    expect(block.annotations?.audience).toEqual(['user'])
+    expect(block.text).toContain('Jane Smith')
+    expect(block.text).toContain('Bob Adams')
+    expect(block.text).not.toMatch(/\[STUDENT_\d{3}\]/)
+    expect(() => JSON.parse(block.text)).not.toThrow()
+  })
+
+  it('content[1] has identical structure to content[0] — only student field differs', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath)
+    const { mcpClient } = await makeTestClient(configPath)
+    const result = await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'class' } })
+    const blinded = parseBlindedResult(result)
+    const unblinded = parseUserResult(result)
+
+    expect(Object.keys(unblinded)).toEqual(Object.keys(blinded))
+    expect(unblinded.students).toHaveLength(blinded.students.length)
+    expect(Object.keys(unblinded.students[0])).toEqual(Object.keys(blinded.students[0]))
+    // Numeric fields are identical — only the `student` field differs
+    expect(unblinded.students[0].current_score).toBe(blinded.students[0].current_score)
+    expect(unblinded.students[0].missing_count).toBe(blinded.students[0].missing_count)
+    expect(unblinded.students[0].student).not.toMatch(/\[STUDENT_\d{3}\]/)
+    expect(blinded.students[0].student).toMatch(/\[STUDENT_\d{3}\]/)
+  })
+
+  it('no content block targets both assistant and user simultaneously', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath)
+    const { mcpClient } = await makeTestClient(configPath)
+    const result = await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'class' } })
+
+    for (const block of getContent(result)) {
+      const audience = block.annotations?.audience ?? []
+      const hasAssistant = audience.includes('assistant')
+      const hasUser = audience.includes('user')
+      expect(hasAssistant && hasUser).toBe(false)
+    }
+  })
+
+  it('get_submission_status: content[0] blinded, content[1] unblinded', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath)
+    mswServer.use(
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/students/submissions`, ({ request }) => {
+        const url = new URL(request.url)
+        if (url.searchParams.get('workflow_state') === 'unsubmitted') {
+          return HttpResponse.json(MOCK_SUBMISSIONS.filter(s => s.workflow_state === 'unsubmitted'))
+        }
+        return HttpResponse.json(MOCK_SUBMISSIONS)
+      }),
+    )
+    const { mcpClient } = await makeTestClient(configPath)
+    const result = await mcpClient.callTool({ name: 'get_submission_status', arguments: { type: 'missing' } })
+    const blocks = getContent(result)
+
+    expect(blocks[0].annotations?.audience).toEqual(['assistant'])
+    expect(blocks[1].annotations?.audience).toEqual(['user'])
+    expect(blocks[0].text).not.toContain('Bob Adams')
+    expect(blocks[1].text).toContain('Bob Adams')
+    expect(blocks[1].text).not.toMatch(/\[STUDENT_\d{3}\]/)
+    expect(() => JSON.parse(blocks[0].text)).not.toThrow()
+    expect(() => JSON.parse(blocks[1].text)).not.toThrow()
+  })
+
+  it('get_grades scope=assignment: content[0] blinded, content[1] unblinded', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath)
+    mswServer.use(
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/assignments/501`, () =>
+        HttpResponse.json({ id: 501, name: 'Assignment A', points_possible: 10, due_at: null, html_url: '' })
+      ),
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/assignments/501/submissions`, () =>
+        HttpResponse.json([MOCK_SUBMISSIONS[0], MOCK_SUBMISSIONS[2]])
+      ),
+    )
+    const { mcpClient } = await makeTestClient(configPath)
+    const result = await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'assignment', assignment_id: 501 } })
+    const blocks = getContent(result)
+
+    expect(blocks[0].annotations?.audience).toEqual(['assistant'])
+    expect(blocks[1].annotations?.audience).toEqual(['user'])
+    expect(blocks[0].text).not.toContain('Jane Smith')
+    expect(blocks[1].text).toContain('Jane Smith')
+    expect(blocks[1].text).not.toMatch(/\[STUDENT_\d{3}\]/)
+    expect(() => JSON.parse(blocks[1].text)).not.toThrow()
+  })
+
+  it('get_grades scope=student: content[0] blinded, content[1] unblinded', async () => {
+    const configPath = makeTmpConfigPath()
+    writeConfig(configPath)
+    const store = new SecureStore()
+    const janeToken = store.tokenize(1001, 'Jane Smith')
+    mswServer.use(
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/students/submissions`, ({ request }) => {
+        const url = new URL(request.url)
+        if (url.searchParams.get('student_ids[]') === '1001') {
+          return HttpResponse.json(MOCK_SUBMISSIONS.filter(s => s.user_id === 1001))
+        }
+        return HttpResponse.json(MOCK_SUBMISSIONS)
+      }),
+      http.get(`${CANVAS_URL}/api/v1/courses/${COURSE_ID}/enrollments`, () =>
+        HttpResponse.json(MOCK_ENROLLMENTS)
+      ),
+    )
+    const { mcpClient } = await makeTestClient(configPath, store)
+    const result = await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'student', student_token: janeToken } })
+    const blocks = getContent(result)
+
+    expect(blocks[0].annotations?.audience).toEqual(['assistant'])
+    expect(blocks[1].annotations?.audience).toEqual(['user'])
+    expect(blocks[0].text).not.toContain('Jane Smith')
+    expect(blocks[1].text).not.toMatch(/\[STUDENT_\d{3}\]/)
+    expect(() => JSON.parse(blocks[1].text)).not.toThrow()
+  })
+})
+
 describe('Coverage gaps', () => {
   it('get_grades(scope=class, sort_by=zeros) handles ties', async () => {
     const configPath = makeTmpConfigPath()
@@ -928,11 +1068,9 @@ describe('Coverage gaps', () => {
     )
     const { mcpClient, store } = await makeTestClient(configPath)
     const result = await mcpClient.callTool({ name: 'get_grades', arguments: { scope: 'class', sort_by: 'zeros' } })
-    const data = parseBlindedResult(result)
-    const userText = getUserText(result)
-    const adamsToken = getStudentToken(userText, 'A Adams')
     // Both have 1 zero, so it should sort by name ASC. Adams first.
-    expect(data.students[0].student).toBe(adamsToken)
+    const userData = parseUserResult(result)
+    expect(userData.students[0].student).toBe('A Adams')
   })
 
   it('get_grades(scope=student) handles non-CanvasApiError', async () => {

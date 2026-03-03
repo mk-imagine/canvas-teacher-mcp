@@ -35,24 +35,25 @@ function toJson(value: unknown) {
 
 /**
  * Builds a two-block response for PII-blinded data.
- * content[0]: blinded JSON for the assistant (no real names or IDs)
- * content[1]: lookup table of token → name for the user only
+ * content[0]: blinded JSON for the assistant — tokens only, no real names
+ * content[1]: unblinded JSON for the user — same structure, tokens replaced with real names
  */
 function blindedResponse(blindedData: unknown, store: SecureStore) {
-  const lookupLines = store.listTokens().map(token => {
+  const blindedJson = JSON.stringify(blindedData, null, 2)
+  const unblindedJson = store.listTokens().reduce((text, token) => {
     const resolved = store.resolve(token)!
-    return `${token} → ${resolved.name}`
-  })
+    return text.replaceAll(token, resolved.name)
+  }, blindedJson)
   return {
     content: [
       {
         type: 'text' as const,
-        text: JSON.stringify(blindedData, null, 2),
+        text: blindedJson,
         annotations: { audience: ['assistant' as const] },
       },
       {
         type: 'text' as const,
-        text: 'Student lookup (current session):\n' + lookupLines.join('\n'),
+        text: unblindedJson,
         annotations: { audience: ['user' as const] },
       },
     ],
@@ -428,6 +429,8 @@ export function registerReportingTools(
           },
         }, secureStore)
       }
+
+      throw new Error(`Unsupported scope: ${(args as any).scope}`)
     }
   )
 
@@ -604,6 +607,8 @@ export function registerReportingTools(
           students: blindedStudents,
         }, secureStore)
       }
+
+      throw new Error(`Unsupported type: ${(args as any).type}`)
     }
   )
 
@@ -663,6 +668,8 @@ export function registerReportingTools(
           ],
         }
       }
+
+      throw new Error(`Unsupported action: ${(args as any).action}`)
     }
   )
 }
