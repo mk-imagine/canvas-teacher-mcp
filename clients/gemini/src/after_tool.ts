@@ -1,15 +1,15 @@
 /**
  * Gemini CLI after_tool hook — progress indicator.
  *
- * Gemini CLI always displays MCP tool result content blocks in the terminal;
- * hooks cannot suppress this. What hooks CAN do is emit a `systemMessage`
- * that appears as a clean summary line in addition to the tool result box.
+ * Gemini CLI uses the hook's stdout to update the tool_response in the LLM's
+ * context window. Returning only `{ systemMessage }` replaces the tool data
+ * entirely, causing the model to see nothing and retry the tool call in a loop.
  *
- * The server now sends only a single blinded content block (no real names),
- * so the terminal display is safe. This hook adds a one-line human-readable
- * summary above/below the tool result box.
+ * The correct pattern is to pass the full hookInput back with `systemMessage`
+ * added so that: (a) the original tool data is preserved in LLM context, and
+ * (b) the progress summary appears in the terminal UI.
  *
- * Returning `{}` on any unrecognised input is a safe no-op.
+ * Returning `{}` on JSON parse failure is a safe no-op (input is unrecoverable).
  */
 
 async function main() {
@@ -44,12 +44,11 @@ async function main() {
   }
 
   const summary = parsedData !== null ? buildSummary(parsedData) : null
-  if (summary === null) {
-    process.stdout.write('{}')
-    return
+  if (summary !== null) {
+    hookInput['systemMessage'] = `[canvas-mcp] ${summary}`
   }
 
-  process.stdout.write(JSON.stringify({ systemMessage: `[canvas-mcp] ${summary}` }))
+  process.stdout.write(JSON.stringify(hookInput))
 }
 
 function buildSummary(data: Record<string, unknown>): string | null {
