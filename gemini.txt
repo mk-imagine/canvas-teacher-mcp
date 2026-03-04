@@ -65,3 +65,30 @@
             "name": "canvas-mcp: progress indicator",
             "timeout": 5000
           }
+
+
+
+      {
+        "matcher": "canvas.mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'echo \"HOOK_FIRED at $(date)\" >> /tmp/hook-test.txt; echo {}'",
+            "name": "debug: prove AfterTool fires",
+            "timeout": 3000
+          },
+          {
+            "type": "command",
+            "command": "node /Users/mark/Repos/canvas-mcp/clients/gemini/dist/after_tool.js",
+            "name": "canvas-mcp: progress indicator",
+            "timeout": 5000
+          }
+        ]
+      }
+
+      {
+						"type": "command",
+						"command": "node /Users/mark/Repos/canvas-mcp/clients/gemini/dist/after_tool.js",
+						"name": "canvas-mcp: progress indicator",
+						"timeout": 5000
+					}

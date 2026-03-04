@@ -93,7 +93,6 @@ Add the following to your Gemini CLI user settings at **`~/.gemini/settings.json
     ],
     "AfterTool": [
       {
-        "matcher": "canvas.mcp__.*",
         "hooks": [
           {
             "type": "command",
@@ -108,7 +107,9 @@ Add the following to your Gemini CLI user settings at **`~/.gemini/settings.json
 }
 ```
 
-The `AfterTool` matcher `canvas.mcp__.*` is a regex. Gemini CLI names MCP tools as `servername__toolname` (no `mcp__` prefix). The `.` wildcard matches both `canvas-mcp__*` and `canvas_mcp__*` depending on whether Gemini CLI preserves or normalises the hyphen. `BeforeModel` and `AfterModel` apply to every model call but return `{}` (no-op) when the sidecar doesn't exist yet.
+**`AfterTool` matcher:** No `matcher` is needed. Gemini CLI passes the bare tool name (e.g. `get_grades`) in the `tool_name` field — not `servername__toolname`. There is no way to filter by server name via the matcher. `after_tool.js` returns `{}` (no-op) for any tool it doesn't recognise, so firing on non-canvas-mcp tools is harmless.
+
+**`BeforeModel` and `AfterModel`** apply to every model call but return `{}` (no-op) when the sidecar doesn't exist yet, or when the prompt/response contains no names or tokens to replace.
 
 > **Project-level override:** You can also place a `.gemini/settings.json` inside a specific project directory. Project settings take precedence over user settings.
 
@@ -117,20 +118,22 @@ The `AfterTool` matcher `canvas.mcp__.*` is a regex. Gemini CLI names MCP tools 
 ## Step 4 — Verify
 
 1. Start a Gemini CLI session with canvas-mcp connected.
-2. Call any grade or submission tool, for example:
+2. Ask a question that triggers a grade or submission tool, for example:
    ```
-   get_grades scope=class
+   who is at most risk?
    ```
-3. You should see a notification in the output:
+3. After the tool call completes, you should see a progress notification from AfterTool:
    ```
-   [canvas-mcp] PII sidecar updated — 32 students mapped to tokens.
+   [canvas-mcp] Fetched grades for 32 students.
    ```
 4. Confirm the sidecar file was written:
    ```bash
    cat ~/.cache/canvas-mcp/pii_session.json
    ```
    It should contain a JSON object with `session_id`, `last_updated`, and a `mapping` object of `[STUDENT_NNN]` ↔ real name pairs.
-5. In subsequent prompts that mention a student by name, `before_model` will replace that name with its token before the model sees it. The model's response (which contains tokens) will be unblinded by `after_model` before it reaches your terminal.
+5. The tool result box in the terminal will show blinded JSON (tokens). This is expected — it reflects exactly what the model receives.
+6. The model's text response will show real student names, unblinded by `after_model` before it reaches your terminal.
+7. In subsequent prompts that mention a student by name, `before_model` will replace that name with its token before the model sees it.
 
 ---
 
@@ -152,21 +155,27 @@ canvas-mcp server                          Gemini CLI process
 get_grades called
   → tokenize students                      before_model hook
   → write sidecar ──────────────────────→    reads sidecar
-  → return blinded JSON                      blinds names in prompt
+  → return blinded JSON                      blinds names in prompt (or {} if none)
                                            model sees only [STUDENT_NNN]
+                                           after_tool hook
+                                             shows progress systemMessage to user
                                            after_model hook
                                              reads sidecar
-                                             replaces tokens with names
-                                           you see real names in output
+                                             replaces tokens with names (or {} if none)
+                                           you see real names in model response
 ```
 
-The sidecar is written fresh whenever the session ID changes (i.e., every new server process), so the hooks always have the correct mapping for the current session. The file is deleted automatically when the server shuts down.
+The sidecar is written on the first blinded tool call of a session, and again whenever additional students are tokenized in subsequent calls (e.g., `get_submission_status` tokenizes students not seen in `get_grades`). The file is deleted automatically when the server shuts down.
+
+**Important:** `before_model` and `after_model` return `{}` (no-op) when there is nothing to replace. Returning an unchanged request or response would cause Gemini CLI to re-trigger the model, creating a tool-call loop.
+
+**Tool result boxes** always display the raw blinded JSON from the MCP server — this is by design and cannot be suppressed via hooks. It reflects exactly what the model receives. The model's *text response* (the `✦` section) is where unblinding occurs.
 
 ---
 
 ## Known limitations
 
-**First-message blindspot:** `before_model` can only replace names that are already in the sidecar. The sidecar doesn't exist until the first canvas-mcp tool call completes. If you type a student's name in your very first message — before running any tool — that name will reach the model unblinded. To avoid this, run `get_grades` (or any other reporting tool) before asking questions that reference specific students. The `[canvas-mcp] PII sidecar updated` notification confirms the sidecar is ready.
+**First-message blindspot:** `before_model` can only replace names that are already in the sidecar. The sidecar doesn't exist until the first canvas-mcp tool call completes. If you type a student's name in your very first message — before running any tool — that name will reach the model unblinded. To avoid this, run a reporting tool (e.g., ask "show me the class grades") before asking questions that reference specific students by name. The `[canvas-mcp] Fetched grades for N students.` notification confirms the sidecar is ready.
 
 **Single server instance:** Two simultaneous canvas-mcp processes will overwrite each other's sidecar. The atomic write prevents file corruption, but only the most recently started process's session will be in the file.
 
