@@ -183,6 +183,7 @@ The `~/.config/mcp/canvas-mcp/config.json` file created in step 6 is shared acro
 
 <details>
 <summary><a id="claude-desktop"></a>Claude Desktop</summary>
+
 1. Download and install [Claude Desktop](https://claude.ai/download) if you haven't already
 2. Open Finder (macOS) and press ⌘+Shift+G, then paste:
    `~/Library/Application Support/Claude/`
@@ -207,7 +208,8 @@ If Claude Desktop was already open with other MCP servers configured, merge the 
 </details>
 
 <details>
-<summary><a id="claude-code-the-claude-cli"></a>Claude Code (Anthropic's `claude` CLI)</summary>
+<summary><a id="claude-code-the-claude-cli"></a>Claude Code (Anthropic's <code>claude</code> CLI)</summary>
+
 Add the server to your user-level MCP config with a single command:
 
 ```bash
@@ -230,7 +232,7 @@ claude mcp list
 </details>
 
 <details>
-<summary><a id="gemini-cli-googles-gemini-cli"></a>Gemini CLI (Google's `gemini` CLI)</summary>
+<summary><a id="gemini-cli-googles-gemini-cli"></a>Gemini CLI (Google's <code>gemini</code> CLI)</summary>
 
 Edit `~/.gemini/settings.json` (create it if it doesn't exist):
 
@@ -248,10 +250,12 @@ Edit `~/.gemini/settings.json` (create it if it doesn't exist):
 If you have other servers already configured, add the `"canvas-mcp"` entry inside the existing `"mcpServers"` object. Restart Gemini CLI after saving.
 
 To limit the server to a single project instead of all sessions, place the same JSON in `.gemini/settings.json` inside that project's folder.
+
+**Hooks (PII blinding):** To enable automatic student-name blinding in Gemini CLI — so real names never reach the model — set up the canvas-mcp hooks. See [clients/gemini/SETUP.md](clients/gemini/SETUP.md) for step-by-step instructions.
 </details>
 
 <details>
-<summary><a id="codex-cli-openais-codex-cli"></a>Codex CLI (OpenAI's `codex` CLI)</summary>
+<summary><a id="codex-cli-openais-codex-cli"></a>Codex CLI (OpenAI's <code>codex</code> CLI)</summary>
 
 Edit `~/.codex/config.toml` (create it if it doesn't exist):
 
@@ -308,7 +312,7 @@ Student names and Canvas IDs in reporting tool responses are automatically repla
 |------|-------------|
 | `upload_file` | Upload a local file to the course Files section via Canvas's 3-step upload protocol. |
 | `delete_file` | Permanently delete a file. Irreversible — no recycle bin via API. |
-| `create_rubric` | Create a rubric and associate it with an assignment. See rubric notes below. |
+| `create_rubric` | Create a rubric and associate it with an assignment. See [rubric notes](#rubrics-require-an-assignment-canvas-limitation) below. |
 
 ### Module creation (high-level)
 
@@ -320,7 +324,15 @@ Student names and Canvas IDs in reporting tool responses are automatically repla
 
 | Tool | Description |
 |------|-------------|
-| `reset_course` | Preview or execute a full course content reset. Pass `dry_run: true` to list what would be deleted and receive a `confirmation_token`. Pass the token back (provided by the user, not auto-supplied) to execute. Alternatively, pass `confirmation_text` matching the exact course name. See safety notes below. |
+| `reset_course` | Preview or execute a full course content reset. |
+
+#### **NOTES**
+
+**`dry_run`:** Defaults to `dry_run=false`.  You will be provided with a token that expires after 5 minuets.  You must provide the token to the LLM to confirm reset.  If `dry_run=true`, no confirmation is required; returns counts of what would be deleted.
+
+**Alternative confirmation:** The user may instead provide `confirmation_text` exactly matching the Canvas course name (case-sensitive), skipping the token flow entirely.
+
+**Always preserved:** Enrollments, course settings, and navigation tabs are never touched.
 
 ### Smart search (Canvas beta feature)
 
@@ -347,6 +359,8 @@ The session key used to protect the in-memory token map is:
 
 The `--secure-heap=65536` flag in the AI assistant config allocates a locked memory region for cryptographic operation intermediates. Include it in your config as shown in the [Platform-Specific Setup](#platform-specific-setup).
 
+For full details on the threat model and compliance posture, see [docs/FERPA.md](docs/FERPA.md), [docs/SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md), and [docs/PII_ARCHITECTURE.md](docs/PII_ARCHITECTURE.md).
+
 ---
 
 ## Canvas API notes
@@ -364,16 +378,6 @@ Canvas does not support standalone rubrics. A rubric **must** be associated with
 To prevent this, `create_rubric` always requires an `assignment_id` and creates the rubric and its association in a single API call. You cannot create a rubric without linking it to an assignment.
 
 During `reset_course`, the rubric cleanup step (step 8) handles any pre-existing zombie rubrics (e.g., created manually via the Canvas UI) by creating a temporary assignment, associating the zombie rubric with it, deleting the rubric (now deletable), and then deleting the temp assignment. Rubrics that cannot be recovered are reported in the response under `rubrics_failed`.
-
-### `reset_course` safety protocol
-
-**Step 1 — Preview:** Call `reset_course(dry_run=true)`. No confirmation required. Returns counts of what would be deleted and a short-lived `confirmation_token`. Show the preview to the user.
-
-**Step 2 — Execute:** Call `reset_course(confirmation_token='TOKEN')` (`dry_run` defaults to `false`). The token must be provided by the user — do not auto-supply it. Tokens expire after 5 minutes.
-
-**Alternative to step 2:** The user may instead provide `confirmation_text` exactly matching the Canvas course name (case-sensitive), skipping the token flow entirely.
-
-**Always preserved:** Enrollments, course settings, and navigation tabs are never touched.
 
 **Other notes:**
 - The front page is automatically unset before page deletion.
@@ -416,6 +420,14 @@ npm run build   # compiles packages/core and packages/teacher → their dist/ fo
 ### Project structure
 
 ```
+clients/
+└── gemini/                       # Gemini CLI hooks for PII blinding (see clients/gemini/SETUP.md)
+    ├── src/
+    │   ├── before_model.ts       # BeforeModel hook — blinds student names in prompt
+    │   ├── after_model.ts        # AfterModel hook — undblinds tokens in model response
+    │   └── after_tool.ts         # AfterTool hook — progress indicator for canvas-mcp tool calls
+    ├── SETUP.md                  # Step-by-step hook installation guide
+    └── HOOK_REFERENCE.md         # Hook API reference
 packages/
 ├── core/                         # @canvas-mcp/core — shared Canvas API layer
 │   └── src/
@@ -435,20 +447,31 @@ packages/
 │       │   ├── schema.ts         # Config types and DEFAULT_CONFIG
 │       │   └── manager.ts        # Read/write ~/.config/mcp/canvas-mcp/config.json
 │       ├── security/
-│       │   └── secure-store.ts   # AES-256-GCM in-memory PII store (session tokens, mlock)
+│       │   ├── secure-store.ts   # AES-256-GCM in-memory PII store (session tokens, mlock)
+│       │   └── sidecar-manager.ts# Writes/deletes the PII sidecar file for Gemini CLI hooks
 │       ├── templates/
 │       │   └── index.ts          # Module template renderer (Handlebars)
 │       └── tools/
 │           └── context.ts        # list_courses, set_active_course, get_active_course
 └── teacher/                      # @canvas-mcp/teacher — MCP server entry point
-    └── src/
-        ├── index.ts              # MCP server wiring and startup
-        └── tools/
-            ├── content.ts        # upload_file, create_rubric, delete_file
-            ├── modules.ts        # build_module (lesson / solution / clone templates)
-            ├── reporting.ts      # get_module_summary, get_grades, get_submission_status, student_pii
-            ├── reset.ts          # reset_course (dry_run + confirmation gate)
-            └── find.ts           # create_item, list_items, find_item, update_item, delete_item, search_course
+    ├── src/
+    │   ├── index.ts              # MCP server wiring and startup
+    │   └── tools/
+    │       ├── content.ts        # upload_file, create_rubric, delete_file
+    │       ├── modules.ts        # build_module (lesson / solution / clone templates)
+    │       ├── reporting.ts      # get_module_summary, get_grades, get_submission_status, student_pii
+    │       ├── reset.ts          # reset_course (dry_run + confirmation gate)
+    │       └── find.ts           # create_item, list_items, find_item, update_item, delete_item, search_course
+    └── tests/
+        ├── setup/
+        │   └── msw-server.ts     # Shared MSW server setup for unit tests
+        └── unit/tools/
+            ├── content.test.ts
+            ├── context.test.ts
+            ├── find.test.ts
+            ├── modules.test.ts
+            ├── reporting.test.ts
+            └── reset.test.ts
 tests/
-└── integration/          # Real Canvas API tests, requires .env.test
+└── integration/                  # Real Canvas API tests, requires .env.test
 ```
