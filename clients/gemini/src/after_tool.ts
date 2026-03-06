@@ -6,7 +6,7 @@
  * 2. Inject this summary as a 'systemMessage' to guide the model.
  */
 
-function buildSummary(toolName: string, data: Record<string, unknown>): string | null {
+export function buildSummary(toolName: string, data: Record<string, unknown>): string | null {
   // get_submission_status (Missing)
   if (typeof data['total_missing_submissions'] === 'number') {
     return `Found ${data['total_missing_submissions']} missing submissions.`
@@ -78,7 +78,10 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  process.stderr.write(`[canvas-mcp/after_tool] Error: ${(err as Error).message}\n`)
-  process.exit(1)
-})
+if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('after_tool.ts')) {
+  main().catch((err) => {
+    process.stderr.write(`[canvas-mcp/after_tool] Error: ${(err as Error).message}\n`)
+    process.exit(1)
+  })
+}
+

@@ -22,7 +22,7 @@ function loadMapping(): Record<string, string> | null {
   }
 }
 
-function blindText(text: string, mapping: Record<string, string>): string {
+export function blindText(text: string, mapping: Record<string, string>): string {
   let result = text
   for (const [key, value] of Object.entries(mapping)) {
     if (!key.startsWith('[STUDENT_')) {
@@ -32,7 +32,7 @@ function blindText(text: string, mapping: Record<string, string>): string {
   return result
 }
 
-function blindValue(value: unknown, mapping: Record<string, string>): unknown {
+export function blindValue(value: unknown, mapping: Record<string, string>): unknown {
   if (typeof value === 'string') return blindText(value, mapping)
   if (Array.isArray(value)) return value.map((v) => blindValue(v, mapping))
   if (value !== null && typeof value === 'object') {
@@ -91,7 +91,10 @@ async function main() {
   }))
 }
 
-main().catch((err) => {
-  process.stderr.write(`[canvas-mcp/before_model] Error: ${(err as Error).message}\n`)
-  process.exit(1)
-})
+if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('before_model.ts')) {
+  main().catch((err) => {
+    process.stderr.write(`[canvas-mcp/before_model] Error: ${(err as Error).message}\n`)
+    process.exit(1)
+  })
+}
+

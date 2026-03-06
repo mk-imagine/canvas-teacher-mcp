@@ -8,22 +8,22 @@ const BUFFER_PATH = join(CACHE_DIR, 'pii_buffer.txt')
 
 const sidecarPath = process.env['CANVAS_MCP_SIDECAR_PATH'] ?? DEFAULT_SIDECAR_PATH
 
-const TOKEN_PATTERN = /\[STUDENT_\d{3}\]/g
+export const TOKEN_PATTERN = /\[STUDENT_\d{3}\]/g
 const PARTIAL_PATTERN = /\[(?:S(?:T(?:U(?:D(?:E(?:N(?:T(?:_(?:\d{0,3})?)?)?)?)?)?)?)?)?$/
 
 interface SidecarFile {
   mapping: Record<string, string>
 }
 
-interface HookContext {
+export interface HookContext {
   inputBuffer: string
   nextBuffer: string
 }
 
-function loadMapping(): Record<string, string> | null {
-  if (!existsSync(sidecarPath)) return null
+export function loadMapping(path: string = sidecarPath): Record<string, string> | null {
+  if (!existsSync(path)) return null
   try {
-    const data = JSON.parse(readFileSync(sidecarPath, 'utf-8')) as SidecarFile
+    const data = JSON.parse(readFileSync(path, 'utf-8')) as SidecarFile
     return data.mapping
   } catch {
     return null
@@ -45,7 +45,7 @@ function writeBufferFile(content: string) {
   } catch { }
 }
 
-function processString(text: string, mapping: Record<string, string>, ctx: HookContext): string {
+export function processString(text: string, mapping: Record<string, string>, ctx: HookContext): string {
   let workingText = text
 
   if (ctx.inputBuffer.length > 0) {
@@ -69,7 +69,7 @@ function processString(text: string, mapping: Record<string, string>, ctx: HookC
   return unblinded
 }
 
-function processValue(value: unknown, mapping: Record<string, string>, ctx: HookContext): unknown {
+export function processValue(value: unknown, mapping: Record<string, string>, ctx: HookContext): unknown {
   if (typeof value === 'string') return processString(value, mapping, ctx)
   if (Array.isArray(value)) return value.map((v) => processValue(v, mapping, ctx))
   if (value !== null && typeof value === 'object') {
@@ -125,7 +125,10 @@ async function main() {
   }))
 }
 
-main().catch((err) => {
-  process.stderr.write(`[canvas-mcp/after_model] Error: ${(err as Error).message}\n`)
-  process.exit(1)
-})
+if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('after_model.ts')) {
+  main().catch((err) => {
+    process.stderr.write(`[canvas-mcp/after_model] Error: ${(err as Error).message}\n`)
+    process.exit(1)
+  })
+}
+
