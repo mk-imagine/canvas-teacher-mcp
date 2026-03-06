@@ -1,8 +1,10 @@
 /**
- * Instrumented Buffered AfterModel Hook.
+ * Gemini CLI after_model hook — Robust Smart Buffering & Verbose Debugging.
  *
- * Logic: Buffers partial tokens to handle stream splitting.
- * Debug: Logs buffer usage and replacements to 'aftermodel-hook-test.txt'.
+ * FEATURES:
+ * 1. Buffering: Handles split tokens (e.g. "[STUD" + "ENT_001]").
+ * 2. Smart Prepend: Verifies buffer+chunk validity before merging.
+ * 3. Verbose Logging: Records EVERY success, failure, and decision to 'aftermodel-hook-test.txt'.
  */
 
 import { readFileSync, existsSync, writeFileSync, appendFileSync } from 'node:fs'
@@ -51,8 +53,9 @@ function loadBuffer(): string {
   if (!existsSync(BUFFER_PATH)) return ''
   try {
     const buf = readFileSync(BUFFER_PATH, 'utf-8')
+    // Log presence of buffer so we know we ARE trying to use it
     if (buf.length > 0) {
-      log(`[BUFFER LOAD] Prepending buffered content: "${buf}"`)
+      log(`[BUFFER LOAD] Found buffered content: "${buf}"`)
     }
     return buf
   } catch {
@@ -64,6 +67,9 @@ function saveBuffer(content: string) {
   try {
     if (content.length > 0) {
       log(`[BUFFER SAVE] Storing partial token: "${content}"`)
+    } else {
+      // Optional: Log clearing of buffer to confirm clean state
+      // log(`[BUFFER CLEAR] Buffer empty.`)
     }
     writeFileSync(BUFFER_PATH, content, 'utf-8')
   } catch {
@@ -72,34 +78,63 @@ function saveBuffer(content: string) {
 }
 
 function unblindString(text: string, mapping: Record<string, string>): string {
-  // 1. Prepend buffer from previous chunk
   const buffer = loadBuffer()
-  let combined = buffer + text
+  
+  // --- SMART PREPEND LOGIC ---
+  let workingText = text
+  let bufferUsed = false
 
-  // 2. Perform Replacement on the combined text
-  combined = combined.replaceAll(TOKEN_PATTERN, (token) => {
+  if (buffer.length > 0) {
+    const combined = buffer + text
+    
+    // Check if the buffer actually helps form a token at the start
+    // We look for a token that overlaps the join point (index < buffer.length)
+    const firstTokenMatch = combined.match(TOKEN_PATTERN)
+    
+    if (firstTokenMatch && combined.indexOf(firstTokenMatch[0]) < buffer.length) {
+       log(`[BUFFER SUCCESS] Prepending "${buffer}" formed valid token: ${firstTokenMatch[0]}`)
+       workingText = combined
+       bufferUsed = true
+    } else {
+       // Buffer didn't help form a token. Analyze why.
+       log(`[BUFFER WARNING] Prepending "${buffer}" did NOT form a valid token with text "${text.slice(0, 10)}..."`)
+       
+       // Heuristic: If 'text' contains its own tokens, it might be a full-text refresh
+       if (text.includes('[STUDENT_')) {
+         log(`[BUFFER DISCARD] Discarding buffer because input text contains other tokens (likely full refresh).`)
+         workingText = text // Ignore buffer
+       } else {
+         log(`[BUFFER INFO] Keeping text as-is (buffer ignored).`)
+         workingText = text
+       }
+    }
+  }
+
+  // --- REPLACEMENT ---
+  const unblinded = workingText.replaceAll(TOKEN_PATTERN, (token) => {
     const val = mapping[token]
     if (val) {
       log(`[REPLACE] Success: ${token} -> ${val}`)
       return val
     }
-    log(`[MISSING] No mapping for ${token}`)
+    log(`[MISSING] No mapping found for ${token}`)
     return token
   })
 
-  // 3. Check for new partial token at the end
-  const match = combined.match(PARTIAL_PATTERN)
+  // --- NEW BUFFERING ---
+  // Check the END of the processed string for a cut-off token
+  const match = unblinded.match(PARTIAL_PATTERN)
   let newBuffer = ''
-  let finalOutput = combined
+  let finalOutput = unblinded
 
   if (match && match[0].length > 0) {
     newBuffer = match[0]
-    finalOutput = combined.slice(0, -newBuffer.length)
+    finalOutput = unblinded.slice(0, -newBuffer.length)
+    // Log that we are hiding something from this chunk
+    log(`[BUFFERING] Detected partial token at end: "${newBuffer}". Hiding from output.`)
   }
 
-  // 4. Save new buffer for next turn
   saveBuffer(newBuffer)
-
   return finalOutput
 }
 
