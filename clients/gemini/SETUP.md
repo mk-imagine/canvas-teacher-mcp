@@ -179,4 +179,4 @@ The sidecar is written on the first blinded tool call of a session, and again wh
 
 **Single server instance:** Two simultaneous canvas-mcp processes will overwrite each other's sidecar. The atomic write prevents file corruption, but only the most recently started process's session will be in the file.
 
-**Plaintext on disk:** The sidecar is unencrypted JSON, protected only by `600` file permissions. `SecureStore` holds the same data encrypted in memory. The sidecar is deleted on server shutdown. See `docs/SECURITY.md` for the full threat model.
+**Plaintext on disk:** The sidecar is unencrypted JSON, protected only by `600` file permissions. `SecureStore` holds the same data encrypted in memory. The sidecar is deleted on server shutdown. See `docs/SECURITY_ARCHITECTURE.md` for the full threat model.

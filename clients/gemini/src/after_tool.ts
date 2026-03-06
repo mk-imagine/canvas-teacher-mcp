@@ -55,7 +55,8 @@ async function main() {
     return
   }
 
-  const textPayload = (hookInput.tool_response as Record<string, unknown>)?.llmContent?.[0]?.text
+  const llmContent = (hookInput.tool_response as Record<string, unknown>)?.llmContent as Record<string, unknown>[] | undefined
+  const textPayload = llmContent?.[0]?.text
   if (!textPayload) {
     process.stdout.write('{}')
     return

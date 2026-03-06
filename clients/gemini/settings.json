@@ -25,19 +25,6 @@
 		"format": "text"
 	},
 	"mcpServers": {
-		"semantic_scholar": {
-			"command": "uv",
-			"args": [
-				"run",
-				"--directory",
-				"/Users/mark/Repos/semantic-scholar-mcp/",
-				"semantic-scholar-mcp",
-				"serve"
-			],
-			"env": {
-				"SEMANTIC_SCHOLAR_API_KEY": "ss_api_key"
-			}
-		},
 		"canvas-mcp": {
 			"command": "node",
 			"args": [
@@ -66,6 +53,18 @@
 						"type": "command",
 						"command": "node /Users/mark/Repos/canvas-mcp/clients/gemini/dist/after_model.js",
 						"name": "canvas-mcp: unblind student names in response",
+						"timeout": 5000
+					}
+				]
+			}
+		],
+		"AfterTool": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "node /Users/mark/Repos/canvas-mcp/clients/gemini/dist/after_tool.js",
+						"name": "canvas-mcp: progress indicator",
 						"timeout": 5000
 					}
 				]

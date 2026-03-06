@@ -8,13 +8,13 @@
     "sidecarPath": "~/.cache/canvas-mcp/pii_session.json"
   },
   "program": {
-    "activeCourseId": 14299357,
+    "activeCourseId": 123456,
     "courseCodes": [
-      "TEST",
-      "CSC 311"
+      "TEST101",
+      "TEST201"
     ],
     "courseCache": {
-      "14299357": {
+      "123456": {
         "code": "TEST",
         "name": "TEST SANDBOX",
         "term": "Default Term"

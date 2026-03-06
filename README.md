@@ -2,7 +2,7 @@
 
 A teacher-facing [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that wraps the Canvas LMS REST API. Designed for an instructor who wants to use an AI assistant (e.g., Claude) to create and manage course content across multiple Canvas courses.
 
-**Security & Privacy:** When installed correctly (following the [step-by-step setup](#step-by-step-setup-first-time)), this MCP server automatically blinds Personally Identifiable Information (PII) from the AI assistant and provides robust security for your data in compliance with FERPA and institutional policies (including UC/CSU). See [FERPA.md](docs/FERPA.md) and [SECURITY.md](docs/SECURITY.md) for details.
+**Security & Privacy:** When installed correctly (following the [step-by-step setup](#step-by-step-setup-first-time)), this MCP server automatically blinds Personally Identifiable Information (PII) from the AI assistant and provides robust security for your data in compliance with FERPA and institutional policies (including UC/CSU). See [FERPA.md](docs/FERPA.md) and [SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md) for details.
 
 > **Note:** In its current state, this server is tailored to the workflows and course structure of a particular school and program. The underlying Canvas API integration is general-purpose, but some defaults, templates, and naming conventions reflect that specific instructional context. Generalizing these is planned.
 
@@ -181,8 +181,8 @@ If you use a custom location, replace `~/.config/mcp/canvas-mcp` with your chose
 
 The `~/.config/mcp/canvas-mcp/config.json` file created in step 6 is shared across all clients — you only configure it once.
 
-### Claude Desktop
-
+<details>
+<summary><a id="claude-desktop"></a>Claude Desktop</summary>
 1. Download and install [Claude Desktop](https://claude.ai/download) if you haven't already
 2. Open Finder (macOS) and press ⌘+Shift+G, then paste:
    `~/Library/Application Support/Claude/`
@@ -204,9 +204,10 @@ The `~/.config/mcp/canvas-mcp/config.json` file created in step 6 is shared acro
 6. Look for a hammer icon (🔨) in the Claude Desktop chat window — this confirms MCP tools are connected. Click it to see the tool list.
 
 If Claude Desktop was already open with other MCP servers configured, merge the `"canvas-mcp"` entry into your existing `"mcpServers"` object rather than replacing it.
+</details>
 
-### Claude Code (Anthropic's `claude` CLI)
-
+<details>
+<summary><a id="claude-code-the-claude-cli"></a>Claude Code (Anthropic's `claude` CLI)</summary>
 Add the server to your user-level MCP config with a single command:
 
 ```bash
@@ -226,8 +227,10 @@ Verify the server was added:
 ```bash
 claude mcp list
 ```
+</details>
 
-### Gemini CLI (Google's `gemini` CLI)
+<details>
+<summary><a id="gemini-cli-googles-gemini-cli"></a>Gemini CLI (Google's `gemini` CLI)</summary>
 
 Edit `~/.gemini/settings.json` (create it if it doesn't exist):
 
@@ -245,8 +248,10 @@ Edit `~/.gemini/settings.json` (create it if it doesn't exist):
 If you have other servers already configured, add the `"canvas-mcp"` entry inside the existing `"mcpServers"` object. Restart Gemini CLI after saving.
 
 To limit the server to a single project instead of all sessions, place the same JSON in `.gemini/settings.json` inside that project's folder.
+</details>
 
-### Codex CLI (OpenAI's `codex` CLI)
+<details>
+<summary><a id="codex-cli-openais-codex-cli"></a>Codex CLI (OpenAI's `codex` CLI)</summary>
 
 Edit `~/.codex/config.toml` (create it if it doesn't exist):
 
@@ -257,6 +262,7 @@ args = ["--secure-heap=65536", "/path/to/canvas-mcp/packages/teacher/dist/index.
 ```
 
 To limit it to a single project, place the same TOML in `.codex/config.toml` inside that project's folder (the project must be trusted).
+</details>
 
 ## Tools
 
