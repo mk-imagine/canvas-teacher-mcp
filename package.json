@@ -1,7 +1,9 @@
 {
   "name": "canvas-mcp",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "build": "npm run build -w packages/core && npm run build -w packages/teacher",
     "test": "npm run test:unit && npm run test:integration",
@@ -10,9 +12,11 @@
     "test:unit:coverage": "npm run test:coverage --workspaces --if-present",
     "test:integration:coverage": "node --no-warnings node_modules/vitest/vitest.mjs run --coverage --config tests/vitest.config.ts",
     "test:coverage": "npm run test:unit:coverage && npm run test:integration:coverage",
-    "seed": "tsx scripts/seed-test-data.ts"
+    "seed": "tsx scripts/seed-test-data.ts",
+    "count-tokens": "tsx scripts/count-tokens.ts"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@canvas-mcp/core": "*",
     "@canvas-mcp/teacher": "*",
     "@types/node": "^22.0.0",
