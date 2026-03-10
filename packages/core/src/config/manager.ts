@@ -40,7 +40,10 @@ export class ConfigManager {
   private readonly configPath: string
 
   constructor(configPath?: string) {
-    this.configPath = configPath ?? join(homedir(), '.config', 'mcp', 'canvas-mcp', 'config.json')
+    this.configPath =
+      configPath ??
+      process.env.CANVAS_MCP_CONFIG ??
+      join(homedir(), '.config', 'mcp', 'canvas-mcp', 'config.json')
   }
 
   read(): CanvasTeacherConfig {
@@ -60,6 +63,14 @@ export class ConfigManager {
 
     const config = deepMerge(DEFAULT_CONFIG, raw)
 
+    // Environment variable overrides (useful for Docker/CI)
+    if (process.env.CANVAS_INSTANCE_URL) {
+      config.canvas.instanceUrl = process.env.CANVAS_INSTANCE_URL
+    }
+    if (process.env.CANVAS_API_TOKEN) {
+      config.canvas.apiToken = process.env.CANVAS_API_TOKEN
+    }
+
     // Expand ~ in sidecarPath
     config.privacy.sidecarPath = expandHome(config.privacy.sidecarPath)
 
@@ -73,10 +84,14 @@ export class ConfigManager {
     }
 
     if (!config.canvas.instanceUrl) {
-      throw new ConfigError('canvas.instanceUrl is not configured')
+      throw new ConfigError(
+        `canvas.instanceUrl is not configured. Set it in ${this.configPath} or via CANVAS_INSTANCE_URL environment variable.`
+      )
     }
     if (!config.canvas.apiToken) {
-      throw new ConfigError('canvas.apiToken is not configured')
+      throw new ConfigError(
+        `canvas.apiToken is not configured. Set it in ${this.configPath} or via CANVAS_API_TOKEN environment variable.`
+      )
     }
 
     return config
