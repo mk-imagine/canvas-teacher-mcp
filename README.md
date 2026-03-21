@@ -4,7 +4,7 @@ A teacher-facing [Model Context Protocol (MCP)](https://modelcontextprotocol.io)
 
 **Security & Privacy:** When installed correctly (following the [step-by-step setup](#step-by-step-setup-first-time)), this MCP server automatically blinds Personally Identifiable Information (PII) from the AI assistant and provides robust security for your data in compliance with FERPA and institutional policies (including UC/CSU). See [FERPA.md](docs/FERPA.md) and [SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md) for details.
 
-> **Note:** In its current state, this server is tailored to the workflows and course structure of a particular school and program. The underlying Canvas API integration is general-purpose, but some defaults, templates, and naming conventions reflect that specific instructional context. Generalizing these is planned.
+> **Note:** The Canvas API integration is general-purpose. Module templates are user-editable JSON/Handlebars files stored in `~/.config/mcp/canvas-mcp/templates/` — defaults are seeded on first run and can be customized or replaced for any course structure.
 
 ## Table of Contents
 
@@ -297,8 +297,8 @@ Student names and Canvas IDs in reporting tool responses are automatically repla
 
 | Tool | Description |
 |------|-------------|
-| `create_item` | Create a course item. `type`: `page`, `assignment`, `quiz`, `discussion`, `announcement`, `module`, or `module_item`. Pass `dry_run: true` to preview the resolved inputs without calling Canvas. |
-| `list_items` | List course items by type: `modules`, `assignments`, `quizzes`, `pages`, `discussions`, `announcements`, `rubrics`, `assignment_groups`, or `module_items` (requires `module_name`). |
+| `create_item` | Create a course item. `type`: `page`, `assignment`, `quiz`, `discussion`, `announcement`, `module`, or `module_item`. Supports optional `template_name`/`template_data` for template-rendered pages. Pass `dry_run: true` to preview the resolved inputs without calling Canvas. |
+| `list_items` | List course items by type: `modules`, `assignments`, `quizzes`, `pages`, `discussions`, `announcements`, `rubrics`, `assignment_groups`, `module_items` (requires `module_name`), or `templates` (lists available module templates). |
 
 ### Find, update & delete
 
@@ -320,7 +320,7 @@ Student names and Canvas IDs in reporting tool responses are automatically repla
 
 | Tool | Description |
 |------|-------------|
-| `build_module` | Build a module from a `template`: `"lesson"` (full week module from a named template with assignments, pages, and exit card), `"solution"` (solution module linked to a lesson module), or `"clone"` (copy a module from any course with optional week number substitution). |
+| `build_module` | Build a module by `mode`: `"blueprint"` (render a named template from `~/.config/mcp/canvas-mcp/templates/`), `"manual"` (explicit item list), `"solution"` (solution module linked to a lesson module), or `"clone"` (copy a module from any course with optional week number substitution). |
 
 ### Destructive operations
 
@@ -453,48 +453,55 @@ clients/
     └── HOOK_REFERENCE.md         # Hook API reference
 packages/
 ├── core/                         # @canvas-mcp/core — shared Canvas API layer
-│   └── src/
-│       ├── canvas/
-│       │   ├── client.ts         # HTTP client (auth, pagination, rate limiting, retry)
-│       │   ├── courses.ts        # Course & enrollment API calls
-│       │   ├── modules.ts        # Module & module item API calls
-│       │   ├── assignments.ts    # Assignment & assignment-group API calls
-│       │   ├── quizzes.ts        # Classic Quiz API calls
-│       │   ├── pages.ts          # Page API calls (CRUD + front page handling)
-│       │   ├── discussions.ts    # Discussion topic & announcement API calls
-│       │   ├── files.ts          # File upload (3-step Canvas/S3 flow) & delete
-│       │   ├── rubrics.ts        # Rubric CRUD + association API calls
-│       │   ├── submissions.ts    # Grade & submission API calls
-│       │   └── search.ts         # Canvas Smart Search API
-│       ├── config/
-│       │   ├── schema.ts         # Config types and DEFAULT_CONFIG
-│       │   └── manager.ts        # Read/write ~/.config/mcp/canvas-mcp/config.json
-│       ├── security/
-│       │   ├── secure-store.ts   # AES-256-GCM in-memory PII store (session tokens, mlock)
-│       │   └── sidecar-manager.ts# Writes/deletes the PII sidecar file for Gemini CLI hooks
-│       ├── templates/
-│       │   └── index.ts          # Module template renderer (Handlebars)
-│       └── tools/
-│           └── context.ts        # list_courses, set_active_course, get_active_course
+│   ├── src/
+│   │   ├── canvas/
+│   │   │   ├── client.ts         # HTTP client (auth, pagination, rate limiting, retry)
+│   │   │   ├── courses.ts        # Course & enrollment API calls
+│   │   │   ├── modules.ts        # Module & module item API calls
+│   │   │   ├── assignments.ts    # Assignment & assignment-group API calls
+│   │   │   ├── quizzes.ts        # Classic Quiz API calls
+│   │   │   ├── pages.ts          # Page API calls (CRUD + front page handling)
+│   │   │   ├── discussions.ts    # Discussion topic & announcement API calls
+│   │   │   ├── files.ts          # File upload (3-step Canvas/S3 flow) & delete
+│   │   │   ├── rubrics.ts        # Rubric CRUD + association API calls
+│   │   │   ├── submissions.ts    # Grade & submission API calls
+│   │   │   └── search.ts         # Canvas Smart Search API
+│   │   ├── config/
+│   │   │   ├── schema.ts         # Config types and DEFAULT_CONFIG
+│   │   │   └── manager.ts        # Read/write ~/.config/mcp/canvas-mcp/config.json
+│   │   ├── security/
+│   │   │   ├── secure-store.ts   # AES-256-GCM in-memory PII store (session tokens, mlock)
+│   │   │   └── sidecar-manager.ts# Writes/deletes the PII sidecar file for Gemini CLI hooks
+│   │   ├── templates/
+│   │   │   ├── index.ts          # Re-exports from service.ts
+│   │   │   ├── service.ts        # TemplateService — manifest parsing, Handlebars rendering
+│   │   │   ├── seed.ts           # Seeds default templates to user config dir on first run
+│   │   │   └── defaults/         # Bundled default templates (later-standard, later-review, etc.)
+│   │   └── tools/
+│   │       └── context.ts        # list_courses, set_active_course, get_active_course
+│   └── tests/
+│       ├── setup/
+│       │   └── msw-server.ts     # Shared MSW server setup for core unit tests
+│       └── unit/tools/
+│           └── context.test.ts   # Tests for context tools (moved from teacher)
 └── teacher/                      # @canvas-mcp/teacher — MCP server entry point
     ├── src/
     │   ├── index.ts              # MCP server wiring and startup
     │   └── tools/
     │       ├── content.ts        # upload_file, create_rubric, delete_file
-    │       ├── modules.ts        # build_module (lesson / solution / clone templates)
+    │       ├── modules.ts        # build_module (blueprint / manual / solution / clone)
     │       ├── reporting.ts      # get_module_summary, get_grades, get_submission_status, student_pii
     │       ├── reset.ts          # reset_course (dry_run + confirmation gate)
     │       └── find.ts           # create_item, list_items, find_item, update_item, delete_item, search_course
     └── tests/
         ├── setup/
-        │   └── msw-server.ts     # Shared MSW server setup for unit tests
-        └── unit/tools/
-            ├── content.test.ts
-            ├── context.test.ts
-            ├── find.test.ts
-            ├── modules.test.ts
-            ├── reporting.test.ts
-            └── reset.test.ts
-tests/
-└── integration/                  # Real Canvas API tests, requires .env.test
+        │   ├── msw-server.ts     # Shared MSW server setup for unit tests
+        │   └── integration-env.ts# Integration test environment loader
+        ├── unit/tools/
+        │   ├── content.test.ts
+        │   ├── find.test.ts
+        │   ├── modules.test.ts
+        │   ├── reporting.test.ts
+        │   └── reset.test.ts
+        └── integration/          # Real Canvas API tests, requires .env.test
 ```
