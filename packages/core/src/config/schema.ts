@@ -21,6 +21,11 @@ export interface CanvasTeacherConfig {
   smartSearch: {
     distanceThreshold: number
   }
+  attendance: {
+    hostName: string
+    defaultPoints: number
+    defaultMinDuration: number
+  }
 }
 
 export type DeepPartial<T> = {
@@ -43,5 +48,10 @@ export const DEFAULT_CONFIG: CanvasTeacherConfig = {
   },
   smartSearch: {
     distanceThreshold: 0.5,
+  },
+  attendance: {
+    hostName: '',
+    defaultPoints: 10,
+    defaultMinDuration: 0,
   },
 }
