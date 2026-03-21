@@ -49,23 +49,86 @@ export function levenshtein(a: string, b: string): number {
   return prev[n]
 }
 
-export function blindText(text: string, mapping: Record<string, string>): string {
-  let result = text
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+export interface NameIndex {
+  entries: Array<{ name: string; token: string; regex: RegExp; parts: string[] }>
+  uniqueParts: Map<string, string[]>
+  stopwords: Set<string>
+  partRegexes: Map<string, RegExp>
+}
+
+export function buildNameIndex(mapping: Record<string, string>): NameIndex {
+  const entries: NameIndex['entries'] = []
   for (const [key, value] of Object.entries(mapping)) {
     if (!key.startsWith('[STUDENT_')) {
-      result = result.replaceAll(key, value)
+      entries.push({
+        name: key,
+        token: value,
+        regex: new RegExp('(?<!\\w)' + escapeRegex(key) + '(?!\\w)', 'gi'),
+        parts: key.toLowerCase().split(' '),
+      })
     }
+  }
+  entries.sort((a, b) => b.name.length - a.name.length)
+
+  const stopwords = new Set([
+    'will', 'mark', 'grace', 'may', 'grant', 'chase', 'mason',
+    'dean', 'hunter', 'frank', 'dawn', 'page', 'lane', 'drew',
+    'dale', 'glen', 'cole', 'reed', 'wade',
+  ])
+
+  const uniqueParts = new Map<string, string[]>()
+  for (const entry of entries) {
+    for (const part of entry.parts) {
+      if (part.length < 4) continue
+      const existing = uniqueParts.get(part)
+      if (existing) {
+        existing.push(entry.token)
+      } else {
+        uniqueParts.set(part, [entry.token])
+      }
+    }
+  }
+
+  const partRegexes = new Map<string, RegExp>()
+  for (const key of uniqueParts.keys()) {
+    if (!stopwords.has(key)) {
+      partRegexes.set(key, new RegExp("(?<!\\w)" + escapeRegex(key) + "('s)?(?!\\w)", 'gi'))
+    }
+  }
+
+  return { entries, uniqueParts, stopwords, partRegexes }
+}
+
+export function blindText(text: string, mapping: Record<string, string>, index?: NameIndex): string {
+  if (index === undefined) {
+    let result = text
+    for (const [key, value] of Object.entries(mapping)) {
+      if (!key.startsWith('[STUDENT_')) {
+        result = result.replaceAll(key, value)
+      }
+    }
+    return result
+  }
+
+  // Phase 1: case-insensitive full-name regex matching
+  let result = text
+  for (const entry of index.entries) {
+    result = result.replace(entry.regex, entry.token)
   }
   return result
 }
 
-export function blindValue(value: unknown, mapping: Record<string, string>): unknown {
-  if (typeof value === 'string') return blindText(value, mapping)
-  if (Array.isArray(value)) return value.map((v) => blindValue(v, mapping))
+export function blindValue(value: unknown, mapping: Record<string, string>, index?: NameIndex): unknown {
+  if (typeof value === 'string') return blindText(value, mapping, index)
+  if (Array.isArray(value)) return value.map((v) => blindValue(v, mapping, index))
   if (value !== null && typeof value === 'object') {
     const result: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      result[k] = blindValue(v, mapping)
+      result[k] = blindValue(v, mapping, index)
     }
     return result
   }
