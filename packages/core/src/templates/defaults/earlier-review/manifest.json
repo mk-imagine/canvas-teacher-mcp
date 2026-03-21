@@ -36,8 +36,9 @@
       "time_limit": 5,
       "points": 0.5,
       "questions": [
-        { "question_name": "Confidence", "question_text": "Rate your confidence this week.", "question_type": "essay_question" },
-        { "question_name": "Muddiest Point", "question_text": "What is still unclear?", "question_type": "essay_question" }
+        { "question_name": "Confidence", "question_text": "Rate your confidence with this week's material (1 = very low, 5 = very high).", "question_type": "essay_question" },
+        { "question_name": "Muddiest Point", "question_text": "What is still unclear or confusing from this week?", "question_type": "essay_question" },
+        { "question_name": "Most Valuable", "question_text": "What was the most valuable thing you learned this week?", "question_type": "essay_question" }
       ]
     }
   ]
