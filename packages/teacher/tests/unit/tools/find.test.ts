@@ -149,23 +149,6 @@ function writeConfig(path: string, overrides: Record<string, unknown> = {}) {
   const base = {
     canvas: { instanceUrl: CANVAS_URL, apiToken: 'tok' },
     program: { activeCourseId: COURSE_ID, courseCodes: [], courseCache: {} },
-    defaults: {
-      assignmentGroup: 'Assignments',
-      submissionType: 'online_url',
-      pointsPossible: 100,
-      completionRequirement: 'min_score',
-      minScore: 1,
-      exitCardPoints: 0.5,
-    },
-    assignmentDescriptionTemplate: {
-      default: '<h3><a href="{{notebook_url}}">{{notebook_title}}</a></h3>',
-      solution: '<h3><a href="{{notebook_url}}">View Solution</a></h3>',
-    },
-    exitCardTemplate: {
-      title: 'Week {{week}} | Exit Card (5 mins)',
-      quizType: 'graded_survey',
-      questions: [],
-    },
     ...overrides,
   }
   writeFileSync(path, JSON.stringify(base), 'utf-8')
