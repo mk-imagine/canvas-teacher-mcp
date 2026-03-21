@@ -204,7 +204,15 @@ export class TemplateService {
           points = 0
         }
         const submissionTypes = item.submission_types ?? ['online_url']
-        return [{ kind: 'assignment', title, points, due_at, submission_types: submissionTypes }]
+        let description: string | undefined
+        if (item.body_file) {
+          const compiled = compiledBodies.get(item.body_file)
+          if (!compiled) {
+            throw new Error(`Template "${templateName}": body_file "${item.body_file}" not compiled`)
+          }
+          description = compiled(variables)
+        }
+        return [{ kind: 'assignment', title, points, due_at, submission_types: submissionTypes, description }]
       }
 
       case 'Quiz': {
