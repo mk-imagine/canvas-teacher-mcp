@@ -7,7 +7,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { CanvasClient, ConfigManager } from '@canvas-mcp/core'
-import { registerModuleTools } from '../../packages/teacher/src/tools/modules.js'
+import { registerModuleTools } from '../../src/tools/modules.js'
 
 const instanceUrl = process.env.CANVAS_INSTANCE_URL!
 const apiToken = process.env.CANVAS_API_TOKEN!

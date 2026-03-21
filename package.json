@@ -12,6 +12,8 @@
     "test:unit:coverage": "npm run test:coverage --workspaces --if-present",
     "test:integration:coverage": "node --no-warnings node_modules/vitest/vitest.mjs run --coverage --config packages/teacher/vitest.integration.config.ts",
     "test:coverage": "npm run test:unit:coverage && npm run test:integration:coverage",
+    "test:coverage:merge": "npm run test:coverage && node scripts/merge-coverage.mjs",
+    "test:coverage:report": "node scripts/merge-coverage.mjs",
     "seed": "tsx scripts/seed-test-data.ts",
     "count-tokens": "tsx scripts/count-tokens.ts",
     "postinstall": "patch-package"

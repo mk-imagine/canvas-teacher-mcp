@@ -24,6 +24,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reportsDirectory: './coverage/integration',
+      reportOnFailure: true,
       clean: true,
       include: ['src/**/*.ts'],
       exclude: [
