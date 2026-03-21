@@ -6,7 +6,7 @@
   "exports": { ".": "./dist/index.js" },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "echo 'No unit tests in core yet'"
+    "test": "node --no-warnings ../../node_modules/vitest/vitest.mjs run --config vitest.config.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.0",
@@ -16,6 +16,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "msw": "^2.0.0",
     "typescript": "^5.0.0",
     "vitest": "^2.0.0"
   }
