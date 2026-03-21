@@ -35,3 +35,6 @@ export { seedDefaultTemplates } from './templates/seed.js'
 
 // matching utilities
 export * from './matching/index.js'
+
+// attendance
+export * from './attendance/index.js'
