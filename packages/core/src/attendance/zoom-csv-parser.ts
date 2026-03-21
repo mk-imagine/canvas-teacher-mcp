@@ -26,8 +26,17 @@ export function parseZoomCsv(csvContent: string, options?: ZoomCsvOptions): Zoom
   const headerLine = lines[0]
   const headers = headerLine.split(',').map((h) => h.trim().toLowerCase())
 
-  const nameIdx = headers.findIndex((h) => h.startsWith('name'))
-  const durationIdx = headers.findIndex((h) => h.includes('duration'))
+  // Zoom CSVs have duplicate column names: "host name" (col 3) vs "name (original name)" (col 16),
+  // and "duration (minutes)" appears twice (meeting-level col 8, participant-level col 20).
+  // Prefer the specific participant columns; fall back to generic matches for simpler CSVs.
+  let nameIdx = headers.findIndex((h) => h === 'name (original name)')
+  if (nameIdx === -1) {
+    nameIdx = headers.findIndex((h) => h.startsWith('name'))
+  }
+  let durationIdx = headers.lastIndexOf('duration (minutes)')
+  if (durationIdx === -1) {
+    durationIdx = headers.findIndex((h) => h.includes('duration'))
+  }
 
   if (nameIdx === -1) {
     throw new Error('Missing required column: Name. Expected a column starting with "Name" in the CSV header.')
