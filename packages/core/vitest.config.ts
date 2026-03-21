@@ -26,8 +26,10 @@ export default defineConfig({
       clean: true,
       include: ['src/**/*.ts'],
       exclude: [
-        'src/index.ts',
+        '**/index.ts',
+        '**/types.ts',
         '**/*.d.ts',
+        'src/templates/seed.ts',
       ],
     },
   },
