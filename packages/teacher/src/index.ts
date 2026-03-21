@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { ConfigManager, CanvasClient, SecureStore, SidecarManager, registerContextTools } from '@canvas-mcp/core'
+import { ConfigManager, CanvasClient, SecureStore, SidecarManager, registerContextTools, fetchStudentEnrollments } from '@canvas-mcp/core'
 import { registerReportingTools } from './tools/reporting.js'
 import { registerContentTools } from './tools/content.js'
 import { registerModuleTools } from './tools/modules.js'
@@ -26,6 +26,31 @@ async function main() {
   const client = new CanvasClient(config.canvas)
 
   const { activeCourseId, courseCache } = config.program
+
+  // 3.2 — Server-start roster pre-fetch
+  // Fire-and-forget: populate SecureStore before any tool call to eliminate
+  // the first-message blindspot (PII_ARCHITECTURE.md §5.2).
+  if (config.privacy.blindingEnabled && activeCourseId !== null) {
+    void (async () => {
+      try {
+        const enrollments = await fetchStudentEnrollments(client, activeCourseId)
+        for (const enrollment of enrollments) {
+          secureStore.tokenize(enrollment.user_id, enrollment.user.name)
+        }
+        const synced = sidecarManager.sync(secureStore)
+        if (synced) {
+          process.stderr.write(
+            `[canvas-mcp] Pre-fetched ${enrollments.length} students into SecureStore.\n`
+          )
+        }
+      } catch (err) {
+        process.stderr.write(
+          `[canvas-mcp] Roster pre-fetch failed (non-fatal): ${(err as Error).message}\n`
+        )
+      }
+    })()
+  }
+
   let instructions: string
   if (activeCourseId !== null) {
     const cached = courseCache[String(activeCourseId)]
