@@ -203,7 +203,7 @@ If you have other servers already configured, add the `"canvas-mcp"` entry insid
 
 To limit the server to a single project instead of all sessions, place the same JSON in `.gemini/settings.json` inside that project's folder.
 
-**Hooks (PII blinding):** To enable automatic student-name blinding in Gemini CLI — so real names never reach the model — set up the canvas-mcp hooks. See [clients/gemini/SETUP.md](clients/gemini/SETUP.md) for step-by-step instructions.
+**Hooks (PII blinding):** To enable automatic student-name blinding in Gemini CLI — so real names never reach the model — set up the canvas-mcp hooks. See [clients/gemini/SETUP.md](clients/gemini/SETUP.md) for step-by-step instructions. **Note:** A local patch to Gemini CLI is currently required for the hooks to work correctly with student-specific queries — the setup guide covers this.
 </details>
 
 <details>
@@ -447,10 +447,12 @@ clients/
 └── gemini/                       # Gemini CLI hooks for PII blinding (see clients/gemini/SETUP.md)
     ├── src/
     │   ├── before_model.ts       # BeforeModel hook — blinds student names in prompt
-    │   ├── after_model.ts        # AfterModel hook — undblinds tokens in model response
+    │   ├── after_model.ts        # AfterModel hook — unblinds tokens in model response
     │   └── after_tool.ts         # AfterTool hook — progress indicator for canvas-mcp tool calls
+    ├── patches/
+    │   └── gemini-cli-hookTranslator.patch.md  # Required local patch for Gemini CLI (see SETUP.md Step 2b)
     ├── SETUP.md                  # Step-by-step hook installation guide
-    └── HOOK_REFERENCE.md         # Hook API reference
+    └── HOOK_REFERENCE.md         # Hook API reference & behavioral findings
 packages/
 ├── core/                         # @canvas-mcp/core — shared Canvas API layer
 │   ├── src/
