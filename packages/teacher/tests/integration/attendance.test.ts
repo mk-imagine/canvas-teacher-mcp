@@ -22,9 +22,10 @@ const instanceUrl = process.env.CANVAS_INSTANCE_URL!
 const apiToken = process.env.CANVAS_API_TOKEN!
 const testCourseId = parseInt(process.env.CANVAS_TEST_COURSE_ID!)
 const assignment1Id = parseInt(process.env.CANVAS_TEST_ASSIGNMENT_1_ID ?? '0')
+const attendanceAssignmentId = parseInt(process.env.CANVAS_TEST_ATTENDANCE_ASSIGNMENT_ID ?? '0')
 const studentIds = process.env.CANVAS_TEST_STUDENT_IDS?.split(',').map(Number) ?? []
 
-const hasSeedIds = assignment1Id > 0 && studentIds.length === 5
+const hasSeedIds = assignment1Id > 0 && attendanceAssignmentId > 0 && studentIds.length === 5
 
 // ─── Roster discovery ─────────────────────────────────────────────────────────
 // Fetch real student names at runtime so we can build CSV fixtures.
@@ -61,14 +62,14 @@ afterAll(async () => {
   for (const [userId, grade] of originalGrades) {
     try {
       await client.put(
-        `/api/v1/courses/${testCourseId}/assignments/${assignment1Id}/submissions/${userId}`,
+        `/api/v1/courses/${testCourseId}/assignments/${attendanceAssignmentId}/submissions/${userId}`,
         { submission: { posted_grade: grade ?? '' } }
       )
     } catch {
       console.warn(`  Warning: failed to restore grade for user ${userId}`)
     }
   }
-  console.log(`  Restored ${originalGrades.size} grades on assignment ${assignment1Id}`)
+  console.log(`  Restored ${originalGrades.size} grades on assignment ${attendanceAssignmentId}`)
 })
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -159,7 +160,7 @@ describe('Integration: import_attendance — parse', () => {
       arguments: {
         action: 'parse',
         csv_path: csvPath,
-        assignment_id: assignment1Id,
+        assignment_id: attendanceAssignmentId,
         points: 10,
       },
     })
@@ -200,7 +201,7 @@ describe('Integration: import_attendance — parse', () => {
 
     const result = await mcpClient.callTool({
       name: 'import_attendance',
-      arguments: { action: 'parse', csv_path: csvPath, assignment_id: assignment1Id },
+      arguments: { action: 'parse', csv_path: csvPath, assignment_id: attendanceAssignmentId },
     })
 
     const text = getResultText(result)
@@ -227,7 +228,7 @@ describe('Integration: import_attendance — submit dry-run', () => {
     const gradesBefore: Record<number, string | null> = {}
     for (const s of testStudents) {
       const sub = await client.getOne<{ grade: string | null }>(
-        `/api/v1/courses/${testCourseId}/assignments/${assignment1Id}/submissions/${s.userId}`,
+        `/api/v1/courses/${testCourseId}/assignments/${attendanceAssignmentId}/submissions/${s.userId}`,
       )
       gradesBefore[s.userId] = sub.grade
     }
@@ -235,18 +236,18 @@ describe('Integration: import_attendance — submit dry-run', () => {
     // Step 1: parse
     await mcpClient.callTool({
       name: 'import_attendance',
-      arguments: { action: 'parse', csv_path: csvPath, assignment_id: assignment1Id, points: 10 },
+      arguments: { action: 'parse', csv_path: csvPath, assignment_id: attendanceAssignmentId, points: 10 },
     })
 
     // Step 2: submit with dry_run=true
     const dryResult = await mcpClient.callTool({
       name: 'import_attendance',
-      arguments: { action: 'submit', assignment_id: assignment1Id, dry_run: true },
+      arguments: { action: 'submit', assignment_id: attendanceAssignmentId, dry_run: true },
     })
 
     const data = parseResult(dryResult)
     expect(data.dry_run).toBe(true)
-    expect(data.assignment_id).toBe(assignment1Id)
+    expect(data.assignment_id).toBe(attendanceAssignmentId)
     expect(data.points).toBe(10)
     expect(data.grades_preview).toHaveLength(3)
 
@@ -258,7 +259,7 @@ describe('Integration: import_attendance — submit dry-run', () => {
     // Verify no grades changed on Canvas
     for (const s of testStudents) {
       const sub = await client.getOne<{ grade: string | null }>(
-        `/api/v1/courses/${testCourseId}/assignments/${assignment1Id}/submissions/${s.userId}`,
+        `/api/v1/courses/${testCourseId}/assignments/${attendanceAssignmentId}/submissions/${s.userId}`,
       )
       expect(sub.grade).toBe(gradesBefore[s.userId])
     }
@@ -288,7 +289,7 @@ describe('Integration: import_attendance — submit', () => {
     for (const s of roster) {
       if (!originalGrades.has(s.userId)) {
         const sub = await client.getOne<{ grade: string | null }>(
-          `/api/v1/courses/${testCourseId}/assignments/${assignment1Id}/submissions/${s.userId}`,
+          `/api/v1/courses/${testCourseId}/assignments/${attendanceAssignmentId}/submissions/${s.userId}`,
         )
         originalGrades.set(s.userId, sub.grade)
       }
@@ -297,7 +298,7 @@ describe('Integration: import_attendance — submit', () => {
     // Step 1: parse all students as present
     const parseResult_ = await mcpClient.callTool({
       name: 'import_attendance',
-      arguments: { action: 'parse', csv_path: csvPath, assignment_id: assignment1Id, points: 10 },
+      arguments: { action: 'parse', csv_path: csvPath, assignment_id: attendanceAssignmentId, points: 10 },
     })
     const parseData = parseResult(parseResult_)
     expect(parseData.matched_count).toBe(roster.length)
@@ -305,13 +306,13 @@ describe('Integration: import_attendance — submit', () => {
     // Step 2: submit for real
     const submitResult = await mcpClient.callTool({
       name: 'import_attendance',
-      arguments: { action: 'submit', assignment_id: assignment1Id },
+      arguments: { action: 'submit', assignment_id: attendanceAssignmentId },
     })
 
     const submitData = parseResult(submitResult)
     expect(submitData.grades_posted).toBe(roster.length)
     expect(submitData.grades_attempted).toBe(roster.length)
-    expect(submitData.assignment_id).toBe(assignment1Id)
+    expect(submitData.assignment_id).toBe(attendanceAssignmentId)
     expect(submitData.points).toBe(10)
     expect(submitData.errors).toHaveLength(0)
 
@@ -329,11 +330,11 @@ describe('Integration: import_attendance — submit', () => {
     }
 
     // Verify grades on Canvas — all students should now have score 10
-    for (const s of roster) {
+    for (let i = 0; i < roster.length; i++) {
       const sub = await client.getOne<{ score: number | null }>(
-        `/api/v1/courses/${testCourseId}/assignments/${assignment1Id}/submissions/${s.userId}`,
+        `/api/v1/courses/${testCourseId}/assignments/${attendanceAssignmentId}/submissions/${roster[i].userId}`,
       )
-      expect(sub.score, `Expected score 10 for user ${s.userId}`).toBe(10)
+      expect(sub.score, `Expected score 10 for roster[${i}]`).toBe(10)
     }
 
     console.log(`  Submitted: ${submitData.grades_posted}/${submitData.grades_attempted} grades posted`)
@@ -347,7 +348,7 @@ describe('Integration: import_attendance — submit', () => {
 
     const result = await mcpClient.callTool({
       name: 'import_attendance',
-      arguments: { action: 'submit', assignment_id: assignment1Id },
+      arguments: { action: 'submit', assignment_id: attendanceAssignmentId },
     })
 
     const text = getResultText(result)
