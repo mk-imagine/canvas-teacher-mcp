@@ -132,3 +132,16 @@ export async function fetchAssignmentGroups(
     { per_page: '100' }
   )
 }
+
+export async function gradeSubmission(
+  client: CanvasClient,
+  courseId: number,
+  assignmentId: number,
+  userId: number,
+  score: number
+): Promise<CanvasSubmission> {
+  return client.put<CanvasSubmission>(
+    `/api/v1/courses/${courseId}/assignments/${assignmentId}/submissions/${userId}`,
+    { submission: { posted_grade: String(score) } }
+  )
+}

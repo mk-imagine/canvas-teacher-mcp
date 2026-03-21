@@ -26,6 +26,7 @@ export {
   fetchAssignmentSubmissions,
   fetchAssignment,
   fetchAssignmentGroups,
+  gradeSubmission,
 } from './canvas/submissions.js'
 
 // template system
