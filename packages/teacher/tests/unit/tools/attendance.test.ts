@@ -153,6 +153,24 @@ function assertNoPII(result: ToolResult) {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('import_attendance', () => {
+  // (10) Submit without prior parse returns error
+  // NOTE: Must run before any parse test since lastParseResult is module-scoped
+  it('submit: returns error when no prior parse exists', async () => {
+    const dir = makeTmpDir()
+    const configPath = makeTmpConfigPath(dir)
+    writeConfig(configPath)
+
+    const { mcpClient } = await makeTestClient(configPath)
+    const result = await mcpClient.callTool({
+      name: 'import_attendance',
+      arguments: { action: 'submit', assignment_id: 100, points: 10 },
+    })
+
+    const text = getContent(result)[0].text
+    expect(text).toContain('No attendance data parsed')
+    expect(text).toContain('parse')
+  })
+
   // (1) Parse happy path
   it('parse: returns tokenized present list when all students match', async () => {
     const dir = makeTmpDir()
@@ -343,19 +361,217 @@ describe('import_attendance', () => {
     expect(text).toContain('No active course')
   })
 
-  // Submit action returns error (not yet implemented)
-  it('submit: returns error telling user to parse first', async () => {
+  // ─── Submit action tests ──────────────────────────────────────────────────
+
+  // (11) Submit dry_run returns preview with correct counts, no API calls
+  it('submit: dry_run returns preview without posting grades', async () => {
     const dir = makeTmpDir()
     const configPath = makeTmpConfigPath(dir)
     writeConfig(configPath)
+    const csvPath = writeCsv(dir, CSV_ALL_MATCH)
+    setupEnrollmentHandler()
+
+    // Track whether any PUT requests are made
+    let putCount = 0
+    mswServer.use(
+      http.put(`${CANVAS_URL}/api/v1/courses/:courseId/assignments/:assignmentId/submissions/:userId`, () => {
+        putCount++
+        return HttpResponse.json({ id: 1, score: 10, workflow_state: 'graded' })
+      }),
+    )
 
     const { mcpClient } = await makeTestClient(configPath)
+
+    // First: parse
+    await mcpClient.callTool({
+      name: 'import_attendance',
+      arguments: { action: 'parse', csv_path: csvPath, assignment_id: 100 },
+    })
+
+    // Then: submit with dry_run
+    const result = await mcpClient.callTool({
+      name: 'import_attendance',
+      arguments: { action: 'submit', assignment_id: 100, points: 10, dry_run: true },
+    })
+
+    const data = parseResult(result)
+    expect(data.dry_run).toBe(true)
+    expect(data.grades_preview).toHaveLength(3)
+    expect(putCount).toBe(0) // No actual API calls made
+    assertNoPII(result)
+  })
+
+  // (12) Submit posts grades for matched students only
+  it('submit: posts grades for matched students and returns confirmation', async () => {
+    const dir = makeTmpDir()
+    const configPath = makeTmpConfigPath(dir)
+    writeConfig(configPath)
+    const csvPath = writeCsv(dir, CSV_ALL_MATCH)
+    setupEnrollmentHandler()
+
+    // Track PUT requests
+    const gradedUserIds: string[] = []
+    mswServer.use(
+      http.put(`${CANVAS_URL}/api/v1/courses/:courseId/assignments/:assignmentId/submissions/:userId`, ({ params }) => {
+        gradedUserIds.push(params['userId'] as string)
+        return HttpResponse.json({
+          id: 1,
+          assignment_id: Number(params['assignmentId']),
+          user_id: Number(params['userId']),
+          score: 10,
+          workflow_state: 'graded',
+        })
+      }),
+    )
+
+    const { mcpClient } = await makeTestClient(configPath)
+
+    // Parse first
+    await mcpClient.callTool({
+      name: 'import_attendance',
+      arguments: { action: 'parse', csv_path: csvPath, assignment_id: 100 },
+    })
+
+    // Submit
+    const result = await mcpClient.callTool({
+      name: 'import_attendance',
+      arguments: { action: 'submit', assignment_id: 100, points: 10 },
+    })
+
+    const data = parseResult(result)
+    expect(data.grades_posted).toBe(3)
+    // Verify PUT was called for each matched student
+    expect(gradedUserIds).toHaveLength(3)
+    expect(gradedUserIds.sort()).toEqual(['1001', '1002', '1003'])
+    assertNoPII(result)
+  })
+
+  // (13) Submit clears state — second submit returns error
+  it('submit: clears parse state after successful submission', async () => {
+    const dir = makeTmpDir()
+    const configPath = makeTmpConfigPath(dir)
+    writeConfig(configPath)
+    const csvPath = writeCsv(dir, CSV_ALL_MATCH)
+    setupEnrollmentHandler()
+
+    mswServer.use(
+      http.put(`${CANVAS_URL}/api/v1/courses/:courseId/assignments/:assignmentId/submissions/:userId`, ({ params }) => {
+        return HttpResponse.json({
+          id: 1,
+          assignment_id: Number(params['assignmentId']),
+          user_id: Number(params['userId']),
+          score: 10,
+          workflow_state: 'graded',
+        })
+      }),
+    )
+
+    const { mcpClient } = await makeTestClient(configPath)
+
+    // Parse
+    await mcpClient.callTool({
+      name: 'import_attendance',
+      arguments: { action: 'parse', csv_path: csvPath, assignment_id: 100 },
+    })
+
+    // First submit succeeds
+    await mcpClient.callTool({
+      name: 'import_attendance',
+      arguments: { action: 'submit', assignment_id: 100, points: 10 },
+    })
+
+    // Second submit fails — state was cleared
     const result = await mcpClient.callTool({
       name: 'import_attendance',
       arguments: { action: 'submit', assignment_id: 100, points: 10 },
     })
 
     const text = getContent(result)[0].text
-    expect(text).toContain('parse')
+    expect(text).toContain('No attendance data parsed')
+  })
+
+  // (14) Partial failure — one grade POST returns 500
+  it('submit: reports per-student errors when some grade posts fail', async () => {
+    const dir = makeTmpDir()
+    const configPath = makeTmpConfigPath(dir)
+    writeConfig(configPath)
+    const csvPath = writeCsv(dir, CSV_ALL_MATCH)
+    setupEnrollmentHandler()
+
+    // User 1002 (Bob Adams) returns 500; others succeed
+    mswServer.use(
+      http.put(`${CANVAS_URL}/api/v1/courses/:courseId/assignments/:assignmentId/submissions/:userId`, ({ params }) => {
+        const userId = params['userId'] as string
+        if (userId === '1002') {
+          return HttpResponse.json({ message: 'Internal Server Error' }, { status: 500 })
+        }
+        return HttpResponse.json({
+          id: 1,
+          assignment_id: Number(params['assignmentId']),
+          user_id: Number(userId),
+          score: 10,
+          workflow_state: 'graded',
+        })
+      }),
+    )
+
+    const { mcpClient } = await makeTestClient(configPath)
+
+    // Parse
+    await mcpClient.callTool({
+      name: 'import_attendance',
+      arguments: { action: 'parse', csv_path: csvPath, assignment_id: 100 },
+    })
+
+    // Submit
+    const result = await mcpClient.callTool({
+      name: 'import_attendance',
+      arguments: { action: 'submit', assignment_id: 100, points: 10 },
+    })
+
+    const data = parseResult(result)
+    // 2 succeeded, 1 failed
+    expect(data.grades_posted).toBe(2)
+    expect(data.errors).toHaveLength(1)
+    assertNoPII(result)
+  })
+
+  // (15) Submit output is PII-blind (no real names)
+  it('submit: response contains only STUDENT tokens, never real names', async () => {
+    const dir = makeTmpDir()
+    const configPath = makeTmpConfigPath(dir)
+    writeConfig(configPath)
+    const csvPath = writeCsv(dir, CSV_ALL_MATCH)
+    setupEnrollmentHandler()
+
+    mswServer.use(
+      http.put(`${CANVAS_URL}/api/v1/courses/:courseId/assignments/:assignmentId/submissions/:userId`, ({ params }) => {
+        return HttpResponse.json({
+          id: 1,
+          assignment_id: Number(params['assignmentId']),
+          user_id: Number(params['userId']),
+          score: 10,
+          workflow_state: 'graded',
+        })
+      }),
+    )
+
+    const { mcpClient } = await makeTestClient(configPath)
+
+    // Parse
+    await mcpClient.callTool({
+      name: 'import_attendance',
+      arguments: { action: 'parse', csv_path: csvPath, assignment_id: 100 },
+    })
+
+    // Submit
+    const result = await mcpClient.callTool({
+      name: 'import_attendance',
+      arguments: { action: 'submit', assignment_id: 100, points: 10 },
+    })
+
+    const raw = getContent(result)[0].text
+    expect(raw).toMatch(/\[STUDENT_\d{3}\]/)
+    assertNoPII(result)
   })
 })

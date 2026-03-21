@@ -6,6 +6,7 @@ import {
   type ConfigManager,
   type CanvasTeacherConfig,
   fetchStudentEnrollments,
+  gradeSubmission,
   parseZoomCsv,
   matchAttendance,
   ZoomNameMap,
@@ -215,8 +216,66 @@ export function registerAttendanceTools(
           return toolError('No attendance data parsed. Run import_attendance with action="parse" first.')
         }
 
-        // Placeholder for packet 3.2
-        return toolError('Submit action not yet implemented. Run parse first.')
+        const config = configManager.read()
+        const { matchResult, courseId, roster } = lastParseResult
+        const assignmentId = args.assignment_id ?? lastParseResult.assignmentId
+        const points = args.points ?? lastParseResult.points ?? config.attendance.defaultPoints
+        const dryRun = args.dry_run ?? false
+
+        if (dryRun) {
+          // Preview mode — no API calls
+          const gradesPreview = matchResult.matched.map((m) => {
+            const token = secureStore.tokenize(m.canvasUserId, m.canvasName)
+            return { student: token, points, status: 'would_post' as const }
+          })
+
+          return blindedResponse(
+            {
+              dry_run: true,
+              course_id: courseId,
+              assignment_id: assignmentId,
+              points,
+              grades_preview: gradesPreview,
+            },
+            secureStore,
+            sidecarManager,
+          )
+        }
+
+        // Live submission — post grades for each matched student
+        const results: Array<{ student: string; points: number; status: 'posted' | 'error'; error?: string }> = []
+        let posted = 0
+        const errors: Array<{ student: string; error: string }> = []
+
+        for (const m of matchResult.matched) {
+          const token = secureStore.tokenize(m.canvasUserId, m.canvasName)
+          try {
+            await gradeSubmission(client, courseId, assignmentId, m.canvasUserId, points)
+            results.push({ student: token, points, status: 'posted' })
+            posted++
+          } catch (err) {
+            const errorMsg = (err as Error).message
+            results.push({ student: token, points, status: 'error', error: errorMsg })
+            errors.push({ student: token, error: errorMsg })
+          }
+        }
+
+        // Clear parse state after (non-dry-run) submission
+        lastParseResult = null
+
+        return blindedResponse(
+          {
+            course_id: courseId,
+            assignment_id: assignmentId,
+            points,
+            grades_posted: posted,
+            grades_attempted: matchResult.matched.length,
+            results,
+            errors,
+          },
+          secureStore,
+          sidecarManager,
+        )
       }
 
       throw new Error(`Unsupported action: ${(args as any).action}`)
