@@ -19,3 +19,17 @@ export interface ZoomCsvOptions {
   /** If provided, rows whose display name matches this value are filtered out (host). */
   hostName?: string
 }
+
+/**
+ * An entry written to the review file for human inspection.
+ * Covers Zoom names that could not be definitively matched to a Canvas student.
+ */
+export interface ReviewEntry {
+  zoomName: string
+  status: 'ambiguous' | 'unmatched'
+  candidates?: Array<{
+    canvasName: string
+    canvasUserId: number
+    distance: number
+  }>
+}
