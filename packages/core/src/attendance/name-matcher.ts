@@ -84,16 +84,23 @@ export function matchAttendance(
     }
 
     // Step 3: Fuzzy Levenshtein matching (full-string + part-to-part)
-    // Compute distances for all roster entries in a single pass
-    type Candidate = { canvasName: string; canvasUserId: number; distance: number }
+    // Compute distances for all roster entries in a single pass.
+    // Store both bestDistance (part-aware) and fullStringDistance (tiebreaker).
+    type Candidate = { canvasName: string; canvasUserId: number; distance: number; fullStringDistance: number }
     const candidates: Candidate[] = []
     const distantCandidates: Candidate[] = []
 
     for (const entry of roster) {
-      const distName = bestDistance(cleanedLower, entry.name.toLowerCase())
-      const distSortable = bestDistance(cleanedLower, entry.sortableName.toLowerCase())
+      const entryNameLower = entry.name.toLowerCase()
+      const entrySortableLower = entry.sortableName.toLowerCase()
+      const distName = bestDistance(cleanedLower, entryNameLower)
+      const distSortable = bestDistance(cleanedLower, entrySortableLower)
       const bestDist = Math.min(distName, distSortable)
-      const candidate = { canvasName: entry.name, canvasUserId: entry.userId, distance: bestDist }
+      const fullDist = Math.min(
+        normalizedDistance(cleanedLower, entryNameLower),
+        normalizedDistance(cleanedLower, entrySortableLower),
+      )
+      const candidate = { canvasName: entry.name, canvasUserId: entry.userId, distance: bestDist, fullStringDistance: fullDist }
 
       if (bestDist < AMBIGUOUS_CEILING) {
         candidates.push(candidate)
@@ -103,22 +110,25 @@ export function matchAttendance(
     }
     distantCandidates.sort((a, b) => a.distance - b.distance)
 
-    // Sort candidates by distance (best first)
-    candidates.sort((a, b) => a.distance - b.distance)
+    // Sort candidates by distance (best first), then by fullStringDistance as tiebreaker
+    candidates.sort((a, b) => a.distance - b.distance || a.fullStringDistance - b.fullStringDistance)
 
     if (candidates.length > 0 && candidates[0].distance < AUTO_MATCH_THRESHOLD) {
-      // Check for ties — if multiple candidates share the best distance, it's ambiguous
-      const tiedCount = candidates.filter((c) => c.distance === candidates[0].distance).length
-      if (tiedCount > 1) {
+      // Check for ties — if multiple candidates share the best distance,
+      // use full-string distance as tiebreaker. If that also ties, it's ambiguous.
+      const bestDist = candidates[0].distance
+      const tied = candidates.filter((c) => c.distance === bestDist)
+      if (tied.length > 1 && tied[0].fullStringDistance === tied[1].fullStringDistance) {
+        // Genuine tie even after tiebreaker — ambiguous
         result.ambiguous.push({
           zoomName: participant.name,
           duration: participant.duration,
-          candidates,
+          candidates: stripInternalFields(candidates),
         })
         continue
       }
 
-      // High-confidence fuzzy match — auto-match and save to nameMap
+      // High-confidence fuzzy match (unique best, or tiebreaker resolved)
       const best = candidates[0]
       result.matched.push({
         zoomName: participant.name,
@@ -136,7 +146,7 @@ export function matchAttendance(
       result.ambiguous.push({
         zoomName: participant.name,
         duration: participant.duration,
-        candidates,
+        candidates: stripInternalFields(candidates),
       })
       continue
     }
@@ -145,7 +155,7 @@ export function matchAttendance(
     result.unmatched.push({
       zoomName: participant.name,
       duration: participant.duration,
-      candidates: distantCandidates.length > 0 ? distantCandidates : undefined,
+      candidates: distantCandidates.length > 0 ? stripInternalFields(distantCandidates) : undefined,
     })
   }
 
@@ -189,6 +199,13 @@ export function bestDistance(a: string, b: string): number {
   }
 
   return best
+}
+
+/** Strip internal-only fields (fullStringDistance) from candidates before returning in results. */
+function stripInternalFields(
+  candidates: Array<{ canvasName: string; canvasUserId: number; distance: number; fullStringDistance: number }>
+): Array<{ canvasName: string; canvasUserId: number; distance: number }> {
+  return candidates.map(({ canvasName, canvasUserId, distance }) => ({ canvasName, canvasUserId, distance }))
 }
 
 /** Compute normalized Levenshtein distance: editDistance / max(a.length, b.length). */

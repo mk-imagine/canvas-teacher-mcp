@@ -189,7 +189,7 @@ describe('matchAttendance', () => {
     expect(result.matched[0].source).toBe('exact')
   })
 
-  it('(11) parenthesized token without slash is kept — "(nickname)" not stripped', () => {
+  it('(11) parenthesized token without slash is kept — tiebreaker resolves via full-string distance', () => {
     const nameMap = new ZoomNameMap()
     const participants: ZoomParticipant[] = [
       { name: 'Jane (Jenny) Smith', originalName: null, duration: 50 },
@@ -199,10 +199,12 @@ describe('matchAttendance', () => {
 
     // "(Jenny)" lacks a slash so it's kept — won't exact-match "Jane Smith".
     // Part matching "Smith" ties between "Jane Smith" and "John Smith" (both distance 0),
-    // so this correctly becomes ambiguous.
-    expect(result.matched).toHaveLength(0)
-    expect(result.ambiguous).toHaveLength(1)
-    expect(result.ambiguous[0].candidates.length).toBeGreaterThanOrEqual(2)
+    // but full-string tiebreaker resolves: "jane (jenny) smith" is closer to "jane smith"
+    // than to "john smith", so Jane Smith wins.
+    expect(result.matched).toHaveLength(1)
+    expect(result.matched[0].canvasUserId).toBe(1)
+    expect(result.matched[0].canvasName).toBe('Jane Smith')
+    expect(result.matched[0].source).toBe('fuzzy')
   })
 
   it('(12) part-to-part matching — first name only matches via parts', () => {
