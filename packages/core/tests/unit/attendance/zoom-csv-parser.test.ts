@@ -89,6 +89,25 @@ Bob Smith,bob@example.com,60`
     expect(result[1].name).toBe('Bob Smith')
   })
 
+  it('filters host rows without (Host) suffix — e.g. rejoin rows', () => {
+    const csv = `Name (original name),Email,Duration (minutes)
+Prof Smith (Host),prof@example.com,60
+Prof Smith,prof@example.com,30
+Alice Johnson,alice@example.com,45`
+    const result = parseZoomCsv(csv, { hostName: 'Prof Smith' })
+    expect(result).toHaveLength(1)
+    expect(result[0].name).toBe('Alice Johnson')
+  })
+
+  it('filters host case-insensitively', () => {
+    const csv = `Name (original name),Email,Duration (minutes)
+prof smith,prof@example.com,90
+Alice Johnson,alice@example.com,45`
+    const result = parseZoomCsv(csv, { hostName: 'Prof Smith' })
+    expect(result).toHaveLength(1)
+    expect(result[0].name).toBe('Alice Johnson')
+  })
+
   it('does not filter host when hostName is not provided', () => {
     const csv = `Name (original name),Email,Duration (minutes)
 Prof Smith (Host),prof@example.com,90

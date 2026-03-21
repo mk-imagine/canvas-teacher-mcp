@@ -65,11 +65,12 @@ export function parseZoomCsv(csvContent: string, options?: ZoomCsvOptions): Zoom
     // Parse "Display Name (Original Name)" format
     const { displayName, originalName } = parseNameField(rawName)
 
-    // Filter host entry: Zoom appends " (Host)" to the host's display name
+    // Filter host entry: remove any row whose display name or original name
+    // matches the configured hostName (case-insensitive).
     if (options?.hostName) {
-      // The display name in CSV may be "Prof Smith (Host)" -- strip the (Host) suffix for comparison
-      const nameWithoutHost = displayName.replace(/\s*\(Host\)\s*$/, '')
-      if (nameWithoutHost === options.hostName) {
+      const hostLower = options.hostName.toLowerCase()
+      const displayLower = displayName.toLowerCase()
+      if (displayLower === hostLower || originalName?.toLowerCase() === hostLower) {
         continue
       }
     }
