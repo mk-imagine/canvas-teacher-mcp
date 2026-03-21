@@ -1,12 +1,27 @@
 import type { ZoomParticipant, ZoomCsvOptions } from './types.js'
 
 /**
+ * Participant-level columns we extract from Zoom CSVs.
+ * All other columns (Topic, Host Name, meeting-level Duration, etc.) are ignored.
+ */
+const PARTICIPANT_COLUMNS = {
+  name: 'name (original name)',
+  duration: 'duration (minutes)',
+} as const
+
+/**
  * Parse a Zoom participant report CSV and return structured participant records.
+ *
+ * Only reads the participant-level columns listed in PARTICIPANT_COLUMNS.
+ * All other columns (Topic, Host Name, meeting-level Duration, etc.) are
+ * ignored entirely, which avoids the host name appearing in non-name columns
+ * from interfering with matching.
  *
  * Handles:
  * - BOM (`\uFEFF`) at start of file
  * - `\r\n` (CRLF) and `\n` (LF) line endings
  * - `Name (original name)` column format: `Display Name` or `Display Name (Original Name)`
+ * - Duplicate column names (uses last occurrence for duration to prefer participant-level)
  * - Optional host filtering via `options.hostName`
  *
  * @throws Error if required columns (Name, Duration) are not found in the header row
@@ -22,36 +37,39 @@ export function parseZoomCsv(csvContent: string, options?: ZoomCsvOptions): Zoom
     return []
   }
 
-  // Parse header row
-  const headerLine = lines[0]
-  const headers = headerLine.split(',').map((h) => h.trim().toLowerCase())
+  // Parse header row and locate only the columns we need.
+  // For "name (original name)", use first exact match (falls back to any "name*" column).
+  // For "duration (minutes)", use LAST occurrence to prefer participant-level over meeting-level.
+  const headers = lines[0].split(',').map((h) => h.trim().toLowerCase())
 
-  // Zoom CSVs have duplicate column names: "host name" (col 3) vs "name (original name)" (col 16),
-  // and "duration (minutes)" appears twice (meeting-level col 8, participant-level col 20).
-  // Prefer the specific participant columns; fall back to generic matches for simpler CSVs.
-  let nameIdx = headers.findIndex((h) => h === 'name (original name)')
+  let nameIdx = headers.findIndex((h) => h === PARTICIPANT_COLUMNS.name)
   if (nameIdx === -1) {
     nameIdx = headers.findIndex((h) => h.startsWith('name'))
   }
-  let durationIdx = headers.lastIndexOf('duration (minutes)')
+  let durationIdx = headers.lastIndexOf(PARTICIPANT_COLUMNS.duration)
   if (durationIdx === -1) {
     durationIdx = headers.findIndex((h) => h.includes('duration'))
   }
 
   if (nameIdx === -1) {
-    throw new Error('Missing required column: Name. Expected a column starting with "Name" in the CSV header.')
+    throw new Error(
+      `Missing required column: Name. Expected "${PARTICIPANT_COLUMNS.name}" in the CSV header.`,
+    )
   }
   if (durationIdx === -1) {
     throw new Error(
-      'Missing required column: Duration. Expected a column containing "Duration" in the CSV header.',
+      `Missing required column: Duration. Expected "${PARTICIPANT_COLUMNS.duration}" in the CSV header.`,
     )
   }
+
+  // Only read from these column indices — everything else is ignored.
+  const maxRequiredIdx = Math.max(nameIdx, durationIdx)
 
   const participants: ZoomParticipant[] = []
 
   for (let i = 1; i < lines.length; i++) {
     const fields = lines[i].split(',').map((f) => f.trim())
-    if (fields.length <= Math.max(nameIdx, durationIdx)) {
+    if (fields.length <= maxRequiredIdx) {
       continue // skip malformed rows
     }
 
@@ -69,8 +87,7 @@ export function parseZoomCsv(csvContent: string, options?: ZoomCsvOptions): Zoom
     // matches the configured hostName (case-insensitive).
     if (options?.hostName) {
       const hostLower = options.hostName.toLowerCase()
-      const displayLower = displayName.toLowerCase()
-      if (displayLower === hostLower || originalName?.toLowerCase() === hostLower) {
+      if (displayName.toLowerCase() === hostLower || originalName?.toLowerCase() === hostLower) {
         continue
       }
     }
