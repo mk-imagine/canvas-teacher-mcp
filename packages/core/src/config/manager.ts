@@ -94,6 +94,10 @@ export class ConfigManager {
     writeFileSync(this.configPath, JSON.stringify(config, null, 2), 'utf-8')
   }
 
+  getConfigDir(): string {
+    return dirname(this.configPath)
+  }
+
   update(patch: DeepPartial<CanvasTeacherConfig>): CanvasTeacherConfig {
     const current = this.read()
     const updated = deepMerge(current, patch)
