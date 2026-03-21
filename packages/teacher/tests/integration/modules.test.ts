@@ -29,26 +29,6 @@ function makeConfig(configPath: string) {
     JSON.stringify({
       canvas: { instanceUrl, apiToken },
       program: { activeCourseId: testCourseId, courseCodes: [], courseCache: {} },
-      defaults: {
-        assignmentGroup: 'Assignments',
-        submissionType: 'online_url',
-        pointsPossible: 100,
-        completionRequirement: 'min_score',
-        minScore: 1,
-        exitCardPoints: 0.5,
-      },
-      assignmentDescriptionTemplate: {
-        default: '<h3><strong><a href="{{notebook_url}}">{{notebook_title}}</a></strong></h3>\n<p>{{instructions}}</p>',
-        solution: '<h3><strong><a href="{{notebook_url}}">View Solution in Colab</a></strong></h3>',
-      },
-      exitCardTemplate: {
-        title: 'Week {{week}} | Exit Card (5 mins)',
-        quizType: 'graded_survey',
-        questions: [
-          { question_name: 'Confidence', question_text: 'Rate your confidence (1–5).', question_type: 'essay_question' },
-          { question_name: 'Muddiest Point', question_text: "What's still unclear?", question_type: 'essay_question' },
-        ],
-      },
     }),
     'utf-8'
   )

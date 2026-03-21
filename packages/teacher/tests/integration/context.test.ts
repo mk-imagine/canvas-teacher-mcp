@@ -40,7 +40,6 @@ function makeConfig(configPath: string) {
     JSON.stringify({
       canvas: { instanceUrl, apiToken },
       program: { activeCourseId: null, courseCodes: [], courseCache: {} },
-      defaults: { assignmentGroup: 'Assignments', submissionType: 'online_url', pointsPossible: 100 },
     }),
     'utf-8'
   )

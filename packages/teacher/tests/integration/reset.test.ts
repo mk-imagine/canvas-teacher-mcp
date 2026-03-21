@@ -41,16 +41,6 @@ function makeConfig(configPath: string) {
     JSON.stringify({
       canvas: { instanceUrl, apiToken },
       program: { activeCourseId: testCourseId, courseCodes: [], courseCache: {} },
-      defaults: {
-        assignmentGroup: 'Assignments',
-        submissionType: 'online_url',
-        pointsPossible: 10,
-        completionRequirement: 'min_score',
-        minScore: 1,
-        exitCardPoints: 0.5,
-      },
-      assignmentDescriptionTemplate: { default: '<p>{{instructions}}</p>', solution: '' },
-      exitCardTemplate: { title: 'Week {{week}} | Exit Card (5 mins)', quizType: 'graded_survey', questions: [] },
     }),
     'utf-8'
   )
