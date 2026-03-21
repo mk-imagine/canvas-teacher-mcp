@@ -18,7 +18,7 @@ import {
   type ReviewEntry,
 } from '@canvas-mcp/core'
 
-// ─── Module-scoped parse state ──────────────────────────────────────────────
+// ─── Per-server parse state (WeakMap prevents cross-instance leakage) ───────
 
 interface ParseState {
   matchResult: MatchResult
@@ -28,7 +28,7 @@ interface ParseState {
   roster: RosterEntry[]
 }
 
-let lastParseResult: ParseState | null = null
+const parseStateByServer = new WeakMap<McpServer, ParseState>()
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -169,13 +169,13 @@ export function registerAttendanceTools(
         const points = args.points ?? config.attendance.defaultPoints
 
         // Store parse result for later submit
-        lastParseResult = {
+        parseStateByServer.set(server, {
           matchResult,
           courseId,
           assignmentId: args.assignment_id ?? 0,
           points,
           roster,
-        }
+        })
 
         // Build tokenized response — blind all student names
         const blindedMatched = matchResult.matched.map((m) => {
@@ -212,6 +212,7 @@ export function registerAttendanceTools(
       }
 
       if (args.action === 'submit') {
+        const lastParseResult = parseStateByServer.get(server) ?? null
         if (lastParseResult === null) {
           return toolError('No attendance data parsed. Run import_attendance with action="parse" first.')
         }
@@ -261,7 +262,7 @@ export function registerAttendanceTools(
         }
 
         // Clear parse state after (non-dry-run) submission
-        lastParseResult = null
+        parseStateByServer.delete(server)
 
         return blindedResponse(
           {
