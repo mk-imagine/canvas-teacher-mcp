@@ -355,3 +355,79 @@ describe('Integration: import_attendance — submit', () => {
     expect(text).toContain('No attendance data parsed')
   })
 })
+
+describe('Integration: import_attendance — name-map re-parse', () => {
+  it.skipIf(!hasSeedIds)('unmatched name resolves via zoom-name-map.json on re-parse', async () => {
+    const configDir = makeTmpConfigDir()
+    const fakeName = 'ZZQQ Nonexistent Person'
+    const targetStudent = roster[0]
+
+    // Build CSV with a single entry using a fake name that won't match anyone
+    const { configPath, csvPath } = makeConfigAndCsv(configDir, [fakeName])
+
+    // ── First parse: expect no matches ──
+    const store1 = new SecureStore()
+    const { mcpClient: client1 } = await makeAttendanceClient(configPath, store1)
+
+    const result1 = await client1.callTool({
+      name: 'import_attendance',
+      arguments: {
+        action: 'parse',
+        csv_path: csvPath,
+        assignment_id: attendanceAssignmentId,
+        points: 10,
+      },
+    })
+
+    const data1 = parseResult(result1)
+    expect(data1.matched_count).toBe(0)
+    expect(data1.unmatched_count + data1.ambiguous_count).toBeGreaterThanOrEqual(1)
+
+    // PII assertion on first response
+    const text1 = getResultText(result1)
+    for (const s of roster) {
+      expect(text1).not.toContain(s.name)
+      expect(text1).not.toContain(s.sortableName)
+    }
+
+    // ── Write name map: fake name → target student ──
+    const nameMapPath = join(configDir, 'zoom-name-map.json')
+    writeFileSync(
+      nameMapPath,
+      JSON.stringify({ 'zzqq nonexistent person': targetStudent.userId }),
+      'utf-8',
+    )
+
+    // ── Second parse: new server/client pair picks up the name map ──
+    const store2 = new SecureStore()
+    const { mcpClient: client2 } = await makeAttendanceClient(configPath, store2)
+
+    const result2 = await client2.callTool({
+      name: 'import_attendance',
+      arguments: {
+        action: 'parse',
+        csv_path: csvPath,
+        assignment_id: attendanceAssignmentId,
+        points: 10,
+      },
+    })
+
+    const data2 = parseResult(result2)
+    expect(data2.matched_count).toBe(1)
+    expect(data2.matched[0].source).toBe('map')
+
+    // PII assertion on second response
+    const text2 = getResultText(result2)
+    for (const s of roster) {
+      expect(text2).not.toContain(s.name)
+      expect(text2).not.toContain(s.sortableName)
+    }
+    // Matched entry uses STUDENT token
+    expect(data2.matched[0].student).toMatch(/^\[STUDENT_\d{3}\]$/)
+
+    console.log(`  Name-map re-parse: ${data2.matched_count} matched via map`)
+
+    store1.destroy()
+    store2.destroy()
+  })
+})
