@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { blindText, blindValue } from '../../src/before_model.js'
+import { blindText, blindValue, levenshtein } from '../../src/before_model.js'
 
 describe('before_model hook', () => {
   // The sidecar mapping is bidirectional: both token→name and name→token entries are present.
@@ -28,6 +28,41 @@ describe('before_model hook', () => {
       const input = '[STUDENT_001] is Alice Smith.'
       const output = blindText(input, mockMapping)
       expect(output).toBe('[STUDENT_001] is [STUDENT_001].')
+    })
+  })
+
+  describe('levenshtein', () => {
+    it('should return 0 for identical strings', () => {
+      expect(levenshtein('alice', 'alice')).toBe(0)
+    })
+
+    it('should return 1 for a single insertion', () => {
+      expect(levenshtein('alice', 'alicee')).toBe(1)
+    })
+
+    it('should return 1 for a single deletion', () => {
+      expect(levenshtein('alice', 'alce')).toBe(1)
+    })
+
+    it('should return 1 for a single substitution', () => {
+      expect(levenshtein('alice', 'alxce')).toBe(1)
+    })
+
+    it('should return full length for completely different strings', () => {
+      expect(levenshtein('abc', 'xyz')).toBe(3)
+    })
+
+    it('should handle empty vs non-empty strings', () => {
+      expect(levenshtein('', 'abc')).toBe(3)
+      expect(levenshtein('abc', '')).toBe(3)
+    })
+
+    it('should return 0 for both empty strings', () => {
+      expect(levenshtein('', '')).toBe(0)
+    })
+
+    it('should be case-sensitive', () => {
+      expect(levenshtein('Alice', 'alice')).toBe(1)
     })
   })
 
