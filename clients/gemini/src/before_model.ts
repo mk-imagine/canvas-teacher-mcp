@@ -120,6 +120,51 @@ export function blindText(text: string, mapping: Record<string, string>, index?:
     result = result.replace(entry.regex, entry.token)
   }
 
+  // Phase 3a: full-name sliding window fuzzy matching (runs before Phase 2
+  // so that partial-name matching doesn't break multi-word fuzzy windows)
+  interface WordToken { text: string; start: number; end: number; consumed: boolean }
+  const extractWords = (s: string): WordToken[] => {
+    const pattern = /[a-zA-Z'-]+/g
+    const tokens: WordToken[] = []
+    let m: RegExpExecArray | null
+    while ((m = pattern.exec(s)) !== null) {
+      // skip words that are inside a [STUDENT_...] token
+      const bracketOpen = s.lastIndexOf('[', m.index)
+      const bracketClose = s.indexOf(']', m.index)
+      if (bracketOpen !== -1 && bracketClose !== -1 && bracketOpen < m.index && bracketClose >= m.index + m[0].length) continue
+      tokens.push({ text: m[0], start: m.index, end: m.index + m[0].length, consumed: false })
+    }
+    return tokens
+  }
+
+  let words = extractWords(result)
+  let offsetDelta = 0
+
+  for (const entry of index.entries) {
+    const n = entry.parts.length
+    for (let i = 0; i <= words.length - n; i++) {
+      if (words.slice(i, i + n).some(w => w.consumed)) continue
+      const windowWords = words.slice(i, i + n)
+      const windowText = windowWords.map(w => w.text).join(' ')
+      const dist = levenshtein(windowText.toLowerCase(), entry.name.toLowerCase())
+      if (dist === 0) continue // already handled by Phase 1
+      const threshold = entry.name.length <= 12 ? 2 : 3
+      if (dist <= threshold) {
+        const spanStart = windowWords[0].start + offsetDelta
+        const spanEnd = windowWords[n - 1].end + offsetDelta
+        let possessive = ''
+        if (result.substring(spanEnd).startsWith("'s")) {
+          possessive = "'s"
+        }
+        const replacement = entry.token + possessive
+        const replaceLen = (spanEnd - spanStart) + possessive.length
+        result = result.substring(0, spanStart) + replacement + result.substring(spanStart + replaceLen)
+        offsetDelta += replacement.length - replaceLen
+        for (let j = i; j < i + n; j++) words[j].consumed = true
+      }
+    }
+  }
+
   // Phase 2: partial-name matching (unique parts, ambiguous expansion)
   for (const [part, regex] of index.partRegexes) {
     if (index.stopwords.has(part)) continue
@@ -129,6 +174,57 @@ export function blindText(text: string, mapping: Record<string, string>, index?:
       result = result.replace(regex, (_match, possessive: string | undefined) => tokens[0] + (possessive || ''))
     } else {
       result = result.replace(regex, (_match, possessive: string | undefined) => [...tokens].sort().join(' and ') + (possessive || ''))
+    }
+  }
+
+  // Phase 3b: single-part fuzzy matching
+  const words2 = extractWords(result)
+  let offsetDelta2 = 0
+
+  for (const word of words2) {
+    // Strip possessive suffix for comparison
+    let bareText = word.text
+    let hasPossessive = false
+    if (bareText.endsWith("'s")) {
+      bareText = bareText.slice(0, -2)
+      hasPossessive = true
+    }
+    if (bareText.length < 4) continue
+    let bestDist = Infinity
+    let bestTokens: string[] | undefined
+    for (const [partKey, tokens] of index.uniqueParts) {
+      if (index.stopwords.has(partKey)) continue
+      if (partKey.length < 4) continue
+      // Require first character match to avoid false positives (e.g. "Malice" -> "alice")
+      if (bareText[0].toLowerCase() !== partKey[0]) continue
+      const dist = levenshtein(bareText.toLowerCase(), partKey)
+      if (dist === 0) continue // already handled by Phase 2
+      const threshold = partKey.length >= 9 ? 2 : 1
+      if (dist <= threshold && dist < bestDist) {
+        bestDist = dist
+        bestTokens = tokens
+      }
+    }
+    if (bestTokens) {
+      const adjStart = word.start + offsetDelta2
+      const adjEnd = word.end + offsetDelta2
+      // Check for possessive either embedded in the word or immediately after
+      let possessive = ''
+      if (hasPossessive) {
+        possessive = "'s"
+      } else if (result.substring(adjEnd).startsWith("'s")) {
+        possessive = "'s"
+      }
+      const tokenStr = bestTokens.length === 1
+        ? bestTokens[0]
+        : [...bestTokens].sort().join(' and ')
+      const replacement = tokenStr + possessive
+      // If possessive was embedded in word.text, it's already within adjStart..adjEnd
+      // If possessive is after the word, we need to include it in the replacement span
+      const extraPossessiveLen = (!hasPossessive && possessive) ? possessive.length : 0
+      const replaceLen = (adjEnd - adjStart) + extraPossessiveLen
+      result = result.substring(0, adjStart) + replacement + result.substring(adjStart + replaceLen)
+      offsetDelta2 += replacement.length - replaceLen
     }
   }
 
@@ -173,6 +269,8 @@ async function main() {
     return
   }
 
+  const index = buildNameIndex(mapping)
+
   let hookInput: Record<string, unknown>
   try {
     hookInput = JSON.parse(raw)
@@ -192,7 +290,7 @@ async function main() {
 
   debugLog('LLM_REQUEST', llmRequest)
 
-  const blindedRequest = blindValue(llmRequest, mapping)
+  const blindedRequest = blindValue(llmRequest, mapping, index)
 
   const originalJson = JSON.stringify(llmRequest)
   const blindedJson = JSON.stringify(blindedRequest)

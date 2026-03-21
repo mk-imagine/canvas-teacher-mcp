@@ -238,6 +238,106 @@ describe('before_model hook', () => {
     })
   })
 
+  describe('Phase 3 - fuzzy matching', () => {
+    const singleAliceMapping: Record<string, string> = {
+      'Alice Smith': '[STUDENT_001]',
+      '[STUDENT_001]': 'Alice Smith',
+    }
+
+    it('full-name typo (insertion)', () => {
+      const index = buildNameIndex(singleAliceMapping)
+      const output = blindText('Alicee Smith did well', singleAliceMapping, index)
+      expect(output).toBe('[STUDENT_001] did well')
+    })
+
+    it('full-name typo with long name', () => {
+      const longMapping: Record<string, string> = {
+        ...singleAliceMapping,
+        'Christopher Reynolds': '[STUDENT_004]',
+        '[STUDENT_004]': 'Christopher Reynolds',
+      }
+      const index = buildNameIndex(longMapping)
+      const output = blindText('Christpher Reyonlds is here', longMapping, index)
+      expect(output).toBe('[STUDENT_004] is here')
+    })
+
+    it('single-part typo (unique part)', () => {
+      const index = buildNameIndex(singleAliceMapping)
+      const output = blindText('Alce did well', singleAliceMapping, index)
+      expect(output).toBe('[STUDENT_001] did well')
+    })
+
+    it('single-part over threshold', () => {
+      const index = buildNameIndex(singleAliceMapping)
+      const output = blindText('Axyz did well', singleAliceMapping, index)
+      expect(output).toBe('Axyz did well')
+    })
+
+    it('full-name over threshold', () => {
+      const index = buildNameIndex(singleAliceMapping)
+      const output = blindText('Xxxxx Yyyyy likes coding', singleAliceMapping, index)
+      expect(output).toBe('Xxxxx Yyyyy likes coding')
+    })
+
+    it('fuzzy does not match stopwords', () => {
+      const markMapping: Record<string, string> = {
+        'Mark Johnson': '[STUDENT_003]',
+        '[STUDENT_003]': 'Mark Johnson',
+      }
+      const index = buildNameIndex(markMapping)
+      const output = blindText('Marl did well', markMapping, index)
+      expect(output).toBe('Marl did well')
+    })
+
+    it('fuzzy does not match short parts', () => {
+      const bobMapping: Record<string, string> = {
+        'Bob Jones': '[STUDENT_002]',
+        '[STUDENT_002]': 'Bob Jones',
+      }
+      const index = buildNameIndex(bobMapping)
+      const output = blindText('Bbb did well', bobMapping, index)
+      expect(output).toBe('Bbb did well')
+    })
+
+    it('fuzzy + possessive', () => {
+      const index = buildNameIndex(singleAliceMapping)
+      const output = blindText("Alce's grades", singleAliceMapping, index)
+      expect(output).toBe("[STUDENT_001]'s grades")
+    })
+  })
+
+  describe('DoD verification - full pipeline', () => {
+    it('pipeline through blindValue with case-insensitive, partial, and typo', () => {
+      const mapping: Record<string, string> = {
+        'Alice Smith': '[STUDENT_001]',
+        '[STUDENT_001]': 'Alice Smith',
+        'Bob Jones': '[STUDENT_002]',
+        '[STUDENT_002]': 'Bob Jones',
+      }
+      const index = buildNameIndex(mapping)
+      const input = {
+        messages: [
+          { role: 'user', content: 'alice smith did great' },
+          { role: 'assistant', content: "Jones's paper was good" },
+          { role: 'user', content: 'What about Alce?' },
+        ],
+      }
+      const output = blindValue(input, mapping, index) as any
+      expect(output.messages[0].content).toBe('[STUDENT_001] did great')
+      expect(output.messages[1].content).toBe("[STUDENT_002]'s paper was good")
+      expect(output.messages[2].content).toBe('What about [STUDENT_001]?')
+    })
+
+    it('no-index exact-only', () => {
+      const mapping: Record<string, string> = {
+        'Alice Smith': '[STUDENT_001]',
+        '[STUDENT_001]': 'Alice Smith',
+      }
+      const output = blindText('alice smith', mapping)
+      expect(output).toBe('alice smith')
+    })
+  })
+
   describe('backward compatibility', () => {
     it('blindText without index returns same as before', () => {
       const output = blindText("What is Alice Smith's grade?", mockMapping)
