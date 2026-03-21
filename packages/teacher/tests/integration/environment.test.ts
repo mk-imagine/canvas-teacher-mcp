@@ -15,7 +15,7 @@ const headers = {
   'Content-Type': 'application/json',
 }
 
-describe('Pre-Phase B: Canvas API connectivity', () => {
+describe('Test environment: Canvas API connectivity and permissions', () => {
   it('authenticates with the Canvas API', async () => {
     const response = await fetch(`${baseUrl}/api/v1/users/self`, { headers })
 

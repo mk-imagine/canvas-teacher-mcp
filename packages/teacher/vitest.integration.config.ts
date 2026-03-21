@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 export default defineConfig({
   resolve: {
     alias: {
-      '@canvas-mcp/core': fileURLToPath(new URL('../packages/core/src/index.ts', import.meta.url)),
+      '@canvas-mcp/core': fileURLToPath(new URL('../core/src/index.ts', import.meta.url)),
     },
   },
   test: {
@@ -32,7 +32,7 @@ export default defineConfig({
         '.history/**',
         'packages/teacher/**',
         '**/coverage/**',
-        'vitest.config.ts',
+        'vitest.integration.config.ts',
         '**/*.d.ts',
       ],
     },
