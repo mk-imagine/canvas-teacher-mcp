@@ -9,8 +9,18 @@ import { registerModuleTools } from './tools/modules.js'
 import { registerResetTools } from './tools/reset.js'
 import { registerFindTools } from './tools/find.js'
 
+// Module-scope so cleanup is reachable from the top-level .catch()
+let secureStore: SecureStore | undefined
+let sidecarManager: SidecarManager | undefined
+
+function cleanup(exitCode = 0): never {
+  sidecarManager?.purge()
+  secureStore?.destroy()
+  process.exit(exitCode)
+}
+
 async function main() {
-  const secureStore = new SecureStore()
+  secureStore = new SecureStore()
 
   const configFlagIndex = process.argv.indexOf('--config')
   const configPath = configFlagIndex !== -1 ? process.argv[configFlagIndex + 1] : undefined
@@ -24,13 +34,12 @@ async function main() {
   seedDefaultTemplates(templatesDir)
   const templateService = new TemplateService(templatesDir)
 
-  const sidecarManager = new SidecarManager(config.privacy.sidecarPath, config.privacy.blindingEnabled)
+  sidecarManager = new SidecarManager(config.privacy.sidecarPath, config.privacy.blindingEnabled)
 
-  const cleanup = () => { sidecarManager.purge(); secureStore.destroy(); process.exit(0) }
-  process.on('SIGINT', cleanup)
-  process.on('SIGTERM', cleanup)
-  process.on('SIGHUP', cleanup)
-  process.on('uncaughtException', () => { cleanup() })
+  process.on('SIGINT', () => cleanup(0))
+  process.on('SIGTERM', () => cleanup(0))
+  process.on('SIGHUP', () => cleanup(0))
+  process.on('uncaughtException', () => cleanup(1))
 
   const client = new CanvasClient(config.canvas)
 
@@ -92,5 +101,5 @@ async function main() {
 
 main().catch((err) => {
   process.stderr.write(`Fatal: ${(err as Error).message}\n`)
-  process.exit(1)
+  cleanup(1)
 })
