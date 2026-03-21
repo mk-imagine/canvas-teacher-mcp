@@ -8,6 +8,7 @@ import { registerContentTools } from './tools/content.js'
 import { registerModuleTools } from './tools/modules.js'
 import { registerResetTools } from './tools/reset.js'
 import { registerFindTools } from './tools/find.js'
+import { registerAttendanceTools } from './tools/attendance.js'
 
 // Module-scope so cleanup is reachable from the top-level .catch()
 let secureStore: SecureStore | undefined
@@ -96,6 +97,7 @@ async function main() {
   registerModuleTools(server, client, configManager, templateService)
   registerResetTools(server, client, configManager)
   registerFindTools(server, client, configManager, templateService)
+  registerAttendanceTools(server, client, configManager, secureStore, sidecarManager)
   await server.connect(new StdioServerTransport())
 }
 
