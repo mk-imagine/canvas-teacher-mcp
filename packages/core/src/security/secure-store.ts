@@ -100,6 +100,17 @@ export class SecureStore {
   }
 
   /**
+   * Pre-assigns tokens to a roster of students in order.
+   * Idempotent: calling preload again with the same (or overlapping) list is a no-op
+   * for already-tokenized IDs; new IDs receive the next counter values.
+   */
+  preload(students: Array<{ canvasUserId: number; name: string }>): void {
+    for (const student of students) {
+      this.tokenize(student.canvasUserId, student.name)
+    }
+  }
+
+  /**
    * Zero-fills the session key and all encrypted entries, then clears the maps.
    * After destroy(), resolve() always returns null.
    */
