@@ -110,4 +110,43 @@ export class RosterStore {
       // Non-fatal — mode was already set on write
     }
   }
+
+  /**
+   * Returns the student with the given Canvas user ID, or `null` if not found.
+   * Reads fresh from disk on every call.
+   */
+  async findByCanvasUserId(id: number): Promise<RosterStudent | null> {
+    const students = await this.load()
+    return students.find((s) => s.canvasUserId === id) ?? null
+  }
+
+  /**
+   * Returns the student whose `emails` array contains a match for the given
+   * address (case-insensitive), or `null` if not found.
+   * Reads fresh from disk on every call.
+   */
+  async findByEmail(email: string): Promise<RosterStudent | null> {
+    const students = await this.load()
+    const lower = email.toLowerCase()
+    return students.find((s) => s.emails.some((e) => e.toLowerCase() === lower)) ?? null
+  }
+
+  /**
+   * Returns the student whose `zoomAliases` array contains a match for the
+   * given alias (case-insensitive), or `null` if not found.
+   * Reads fresh from disk on every call.
+   */
+  async findByZoomAlias(alias: string): Promise<RosterStudent | null> {
+    const students = await this.load()
+    const lower = alias.toLowerCase()
+    return students.find((s) => s.zoomAliases.some((a) => a.toLowerCase() === lower)) ?? null
+  }
+
+  /**
+   * Returns all students in the roster.
+   * Reads fresh from disk on every call.
+   */
+  async allStudents(): Promise<RosterStudent[]> {
+    return this.load()
+  }
 }
