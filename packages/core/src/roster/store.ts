@@ -110,4 +110,64 @@ export class RosterStore {
       // Non-fatal — mode was already set on write
     }
   }
+
+  /**
+   * Inserts or replaces a student record in the roster.
+   *
+   * If a student with the same `canvasUserId` already exists, the entire record
+   * is replaced (full replace, not merge). If not found, the record is appended.
+   */
+  async upsertStudent(student: RosterStudent): Promise<void> {
+    const students = await this.load()
+    const idx = students.findIndex((s) => s.canvasUserId === student.canvasUserId)
+    if (idx >= 0) {
+      students.splice(idx, 1, student)
+    } else {
+      students.push(student)
+    }
+    await this.save(students)
+  }
+
+  /**
+   * Removes a specific course ID from a student's `courseIds` array.
+   *
+   * If the removal leaves the student with no course IDs, the student record is
+   * removed from the roster entirely. Returns `true` if the student was found,
+   * `false` if no student with `canvasUserId` exists.
+   */
+  async removeStudentCourseId(canvasUserId: number, courseId: number): Promise<boolean> {
+    const students = await this.load()
+    const idx = students.findIndex((s) => s.canvasUserId === canvasUserId)
+    if (idx < 0) {
+      return false
+    }
+    const student = students[idx]
+    student.courseIds = student.courseIds.filter((id) => id !== courseId)
+    if (student.courseIds.length === 0) {
+      students.splice(idx, 1)
+    }
+    await this.save(students)
+    return true
+  }
+
+  /**
+   * Adds a Zoom display name alias to a student's `zoomAliases` array.
+   *
+   * Deduplicates case-insensitively — if an alias matching `alias` (ignoring
+   * case) already exists, no duplicate is added. Returns `true` if the student
+   * was found, `false` if no student with `canvasUserId` exists.
+   */
+  async appendZoomAlias(canvasUserId: number, alias: string): Promise<boolean> {
+    const students = await this.load()
+    const student = students.find((s) => s.canvasUserId === canvasUserId)
+    if (!student) {
+      return false
+    }
+    const aliasLower = alias.toLowerCase()
+    if (!student.zoomAliases.some((a) => a.toLowerCase() === aliasLower)) {
+      student.zoomAliases.push(alias)
+    }
+    await this.save(students)
+    return true
+  }
 }
