@@ -31,6 +31,7 @@ export interface CanvasEnrollment {
     id: number
     name: string
     sortable_name: string
+    login_id?: string
   }
   type: 'StudentEnrollment' | 'TeacherEnrollment' | 'TaEnrollment'
   enrollment_state: 'active' | 'invited' | 'completed' | 'inactive'
