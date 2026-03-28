@@ -3,6 +3,9 @@ import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { type CanvasClient } from '../canvas/client.js'
 import { fetchTeacherCourses, type CanvasCourse } from '../canvas/courses.js'
 import { type ConfigManager } from '../config/manager.js'
+import { type RosterStore } from '../roster/store.js'
+import { syncRosterFromEnrollments } from '../roster/sync.js'
+import { type SecureStore } from '../security/secure-store.js'
 
 function tokenize(str: string): string[] {
   return str.toLowerCase().split(/[\s/]+/).filter(Boolean)
@@ -21,7 +24,9 @@ function scoreMatch(course: CanvasCourse, queryTokens: string[]): number {
 export function registerContextTools(
   server: McpServer,
   client: CanvasClient,
-  configManager: ConfigManager
+  configManager: ConfigManager,
+  rosterStore?: RosterStore,
+  secureStore?: SecureStore
 ): void {
   // list_courses
   server.registerTool(
@@ -96,6 +101,20 @@ export function registerContextTools(
             },
           },
         })
+
+        if (rosterStore && secureStore) {
+          syncRosterFromEnrollments(rosterStore, client, course.id)
+            .then((students) =>
+              secureStore.preload(
+                students.map((s) => ({ canvasUserId: s.canvasUserId, name: s.name }))
+              )
+            )
+            .catch((err: Error) =>
+              process.stderr.write(
+                `[roster] Sync failed for course ${course.id}: ${err.message}\n`
+              )
+            )
+        }
 
         return {
           content: [
