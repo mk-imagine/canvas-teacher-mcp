@@ -9,10 +9,10 @@ import {
   gradeSubmission,
   parseZoomCsv,
   matchAttendance,
-  ZoomNameMap,
   writeReviewFile,
   SecureStore,
   SidecarManager,
+  RosterStore,
   type MatchResult,
   type RosterEntry,
   type ReviewEntry,
@@ -74,6 +74,7 @@ export function registerAttendanceTools(
   configManager: ConfigManager,
   secureStore: SecureStore,
   sidecarManager: SidecarManager,
+  rosterStore: RosterStore,
 ): void {
   server.registerTool(
     'import_attendance',
@@ -137,18 +138,31 @@ export function registerAttendanceTools(
           sortableName: e.user.sortable_name,
         }))
 
-        // Load persistent name map
-        const configDir = configManager.getConfigDir()
-        const nameMap = new ZoomNameMap()
-        await nameMap.load(configDir)
+        // Build alias map from RosterStore
+        let students: Awaited<ReturnType<RosterStore['allStudents']>>
+        try {
+          students = await rosterStore.allStudents()
+        } catch (err) {
+          return toolError(`Failed to load roster: ${(err as Error).message}`)
+        }
+        const aliasMap = new Map<string, number>()
+        for (const student of students) {
+          for (const alias of student.zoomAliases) {
+            aliasMap.set(alias.toLowerCase(), student.canvasUserId)
+          }
+        }
 
-        // Run matching pipeline
-        const matchResult = matchAttendance(filtered, roster, nameMap)
+        // Run matching pipeline; collect onAutoMatch promises
+        const autoMatchPromises: Promise<boolean>[] = []
+        const matchResult = matchAttendance(filtered, roster, aliasMap, (zoomName, canvasUserId) => {
+          autoMatchPromises.push(rosterStore.appendZoomAlias(canvasUserId, zoomName))
+        })
 
-        // Save high-confidence fuzzy matches to persistent map
-        await nameMap.save(configDir)
+        // Persist auto-matched aliases
+        await Promise.all(autoMatchPromises)
 
         // Write review file if there are ambiguous or unmatched entries
+        const configDir = configManager.getConfigDir()
         let reviewFilePath: string | null = null
         if (matchResult.ambiguous.length > 0 || matchResult.unmatched.length > 0) {
           const reviewEntries: ReviewEntry[] = [
