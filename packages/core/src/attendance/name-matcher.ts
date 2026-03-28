@@ -1,6 +1,5 @@
 import { levenshtein } from '../matching/levenshtein.js'
 import type { ZoomParticipant, RosterEntry, MatchResult } from './types.js'
-import type { ZoomNameMap } from './zoom-name-map.js'
 
 /** Fuzzy auto-match threshold — distances below this are high-confidence matches. */
 const AUTO_MATCH_THRESHOLD = 0.45
@@ -20,7 +19,8 @@ const PRONOUN_PATTERN = /^\(.*\/.*\)$/
 /**
  * Match Zoom participants to Canvas roster entries using a 4-step pipeline:
  *
- * 1. **Persistent map lookup** — check the ZoomNameMap for a previously saved mapping.
+ * 1. **Alias map lookup** — check `aliasMap` (keyed by lowercase Zoom name) for a
+ *    previously saved mapping.
  * 2. **Exact case-insensitive match** — compare against roster `name` and `sortableName`
  *    (after stripping pronoun-like parenthesized tokens).
  * 3. **Fuzzy Levenshtein match** — splits names into parts and compares both
@@ -28,13 +28,18 @@ const PRONOUN_PATTERN = /^\(.*\/.*\)$/
  *    auto-matches; AUTO_MATCH_THRESHOLD–AMBIGUOUS_CEILING is ambiguous.
  * 4. **Unmatched** — no viable match found.
  *
- * High-confidence fuzzy matches (step 3) are automatically saved to the
- * nameMap for future lookups.
+ * High-confidence fuzzy matches (step 3) invoke `onAutoMatch(zoomName, canvasUserId)`
+ * when provided, so the caller can persist the mapping for future lookups.
+ *
+ * @param aliasMap - Map of lowercase Zoom name → Canvas userId for persistent mappings.
+ * @param onAutoMatch - Optional callback invoked when a high-confidence fuzzy match is
+ *   found. Receives the original (non-lowercased) Zoom display name and Canvas userId.
  */
 export function matchAttendance(
   participants: ZoomParticipant[],
   roster: RosterEntry[],
-  nameMap: ZoomNameMap
+  aliasMap: Map<string, number>,
+  onAutoMatch?: (zoomName: string, canvasUserId: number) => void
 ): MatchResult {
   const result: MatchResult = {
     matched: [],
@@ -48,8 +53,8 @@ export function matchAttendance(
   }
 
   for (const participant of participants) {
-    // Step 1: Persistent map lookup
-    const mappedUserId = nameMap.get(participant.name)
+    // Step 1: Alias map lookup
+    const mappedUserId = aliasMap.get(participant.name.toLowerCase())
     if (mappedUserId !== undefined) {
       const rosterEntry = rosterByUserId.get(mappedUserId)
       if (rosterEntry) {
@@ -140,7 +145,7 @@ export function matchAttendance(
         duration: participant.duration,
         source: 'fuzzy',
       })
-      nameMap.set(participant.name, best.canvasUserId)
+      if (onAutoMatch) onAutoMatch(participant.name, best.canvasUserId)
       continue
     }
 
