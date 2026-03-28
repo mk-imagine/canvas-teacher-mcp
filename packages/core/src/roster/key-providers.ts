@@ -2,8 +2,10 @@ import { execFile as execFileCb } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
 
+import type { CanvasTeacherConfig } from '../config/schema.js'
 import type { RosterKeyProvider } from './types.js'
 
 const execFileAsync = promisify(execFileCb)
@@ -280,4 +282,53 @@ export class SshAgentKeyProvider implements RosterKeyProvider {
       })
     })
   }
+}
+
+// ---------------------------------------------------------------------------
+// createKeyProvider factory
+// ---------------------------------------------------------------------------
+
+/**
+ * Walks the SSH agent → macOS Keychain → file key provider chain and returns
+ * the first available provider.
+ *
+ * Selection order:
+ *   1. SSH agent (`SSH_AUTH_SOCK` set, agent has a valid Ed25519/RSA key)
+ *   2. macOS Keychain (darwin only, `security` CLI accessible)
+ *   3. File fallback: `<configDir>/roster.key` (returned without validation)
+ *
+ * Logs exactly one line to stderr indicating which provider was selected.
+ */
+export async function createKeyProvider(
+  config: CanvasTeacherConfig,
+  configDir: string,
+): Promise<RosterKeyProvider> {
+  // Step 1: SSH agent
+  if (process.env['SSH_AUTH_SOCK']) {
+    try {
+      const provider = new SshAgentKeyProvider(config.security?.rosterKeyFingerprint ?? null)
+      await provider.deriveKey()
+      process.stderr.write('[roster] Using SSH agent key provider\n')
+      return provider
+    } catch {
+      // fall through to next provider
+    }
+  }
+
+  // Step 2: macOS Keychain (darwin only)
+  if (process.platform === 'darwin') {
+    try {
+      const provider = new KeychainKeyProvider()
+      await provider.deriveKey()
+      process.stderr.write('[roster] Using macOS Keychain key provider\n')
+      return provider
+    } catch {
+      // fall through to file provider
+    }
+  }
+
+  // Step 3: File fallback (not validated — caller validates on use)
+  const fp = new FileKeyProvider(join(configDir, 'roster.key'))
+  process.stderr.write('[roster] Using file key provider\n')
+  return fp
 }
