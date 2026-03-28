@@ -26,6 +26,9 @@ export interface CanvasTeacherConfig {
     defaultPoints: number
     defaultMinDuration: number
   }
+  security: {
+    rosterKeyFingerprint: string | null
+  }
 }
 
 export type DeepPartial<T> = {
@@ -53,5 +56,8 @@ export const DEFAULT_CONFIG: CanvasTeacherConfig = {
     hostName: '',
     defaultPoints: 10,
     defaultMinDuration: 0,
+  },
+  security: {
+    rosterKeyFingerprint: null,
   },
 }
