@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
-  "exports": { ".": "./dist/index.js" },
+  "exports": {
+    ".": "./dist/index.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && cp -r src/templates/defaults dist/templates/defaults",
     "test": "node --no-warnings ../../node_modules/vitest/vitest.mjs run --config vitest.config.ts",
@@ -13,10 +15,12 @@
     "@modelcontextprotocol/sdk": "^1.27.0",
     "handlebars": "^4.7.8",
     "posix-node": "^0.12.0",
+    "ssh2": "^1.17.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/ssh2": "^1.15.5",
     "msw": "^2.0.0",
     "typescript": "^5.0.0",
     "vitest": "^2.0.0"
