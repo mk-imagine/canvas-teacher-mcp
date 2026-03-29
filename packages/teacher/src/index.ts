@@ -2,7 +2,7 @@ import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { ConfigManager, CanvasClient, SecureStore, SidecarManager, registerContextTools, fetchStudentEnrollments, TemplateService, seedDefaultTemplates } from '@canvas-mcp/core'
+import { ConfigManager, CanvasClient, SecureStore, SidecarManager, RosterStore, createKeyProvider, migrateZoomNameMap, registerContextTools, fetchStudentEnrollments, TemplateService, seedDefaultTemplates } from '@canvas-mcp/core'
 import { registerReportingTools } from './tools/reporting.js'
 import { registerContentTools } from './tools/content.js'
 import { registerModuleTools } from './tools/modules.js'
@@ -36,6 +36,38 @@ async function main() {
   const templateService = new TemplateService(templatesDir)
 
   sidecarManager = new SidecarManager(config.privacy.sidecarPath, config.privacy.blindingEnabled)
+
+  // Create RosterStore and preload tokens
+  let keyProvider: Awaited<ReturnType<typeof createKeyProvider>> | undefined
+  try {
+    keyProvider = await createKeyProvider(config, configDir)
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    process.stderr.write(`[roster] Failed to create key provider at startup: ${msg}\n`)
+  }
+  const rosterStore = new RosterStore(configDir, keyProvider!)
+  try {
+    const students = await rosterStore.load()
+    secureStore.preload(students.map((s) => ({ canvasUserId: s.canvasUserId, name: s.name })))
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    process.stderr.write(`[roster] Failed to load roster at startup: ${msg}\n`)
+  }
+
+  // Migrate legacy zoom-name-map.json if present.
+  // Adapter bridges RosterStore (returns null/boolean) to migration's local interface (undefined/void).
+  migrateZoomNameMap(configDir, {
+    findByCanvasUserId: async (id: number) => {
+      const s = await rosterStore.findByCanvasUserId(id)
+      return s ?? undefined
+    },
+    appendZoomAlias: async (id: number, alias: string) => {
+      await rosterStore.appendZoomAlias(id, alias)
+    },
+  }).catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err)
+    process.stderr.write(`[roster] Migration failed: ${msg}\n`)
+  })
 
   process.on('SIGINT', () => cleanup(0))
   process.on('SIGTERM', () => cleanup(0))
@@ -91,13 +123,13 @@ async function main() {
   }
 
   const server = new McpServer({ name: 'canvas-mcp', version: '0.1.0' }, { instructions })
-  registerContextTools(server, client, configManager)
+  registerContextTools(server, client, configManager, rosterStore, secureStore)
   registerReportingTools(server, client, configManager, secureStore, sidecarManager)
   registerContentTools(server, client, configManager)
   registerModuleTools(server, client, configManager, templateService)
   registerResetTools(server, client, configManager)
   registerFindTools(server, client, configManager, templateService)
-  registerAttendanceTools(server, client, configManager, secureStore, sidecarManager)
+  registerAttendanceTools(server, client, configManager, secureStore, sidecarManager, rosterStore)
   await server.connect(new StdioServerTransport())
 }
 

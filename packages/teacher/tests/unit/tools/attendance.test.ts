@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,7 +8,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { server as mswServer } from '../../setup/msw-server.js'
-import { CanvasClient, ConfigManager, SecureStore, SidecarManager } from '@canvas-mcp/core'
+import { CanvasClient, ConfigManager, SecureStore, SidecarManager, RosterStore } from '@canvas-mcp/core'
 import { registerAttendanceTools } from '../../../src/tools/attendance.js'
 
 const CANVAS_URL = 'https://canvas.example.com'
@@ -115,13 +115,26 @@ function setupEnrollmentHandler() {
   )
 }
 
+const mockRosterStoreMethods = {
+  allStudents: vi.fn().mockResolvedValue([]),
+  appendZoomAlias: vi.fn().mockResolvedValue(true),
+  load: vi.fn().mockResolvedValue([]),
+  save: vi.fn().mockResolvedValue(undefined),
+  upsertStudent: vi.fn().mockResolvedValue(undefined),
+  removeStudentCourseId: vi.fn().mockResolvedValue(false),
+  findByCanvasUserId: vi.fn().mockResolvedValue(null),
+  findByEmail: vi.fn().mockResolvedValue(null),
+  findByZoomAlias: vi.fn().mockResolvedValue(null),
+}
+const mockRosterStore = mockRosterStoreMethods as unknown as RosterStore
+
 async function makeTestClient(configPath: string, store?: SecureStore) {
   const secureStore = store ?? new SecureStore()
   const configManager = new ConfigManager(configPath)
   const canvasClient = new CanvasClient({ instanceUrl: CANVAS_URL, apiToken: 'tok' })
   const mcpServer = new McpServer({ name: 'test', version: '0.0.1' })
   const sidecarManager = new SidecarManager('', false)
-  registerAttendanceTools(mcpServer, canvasClient, configManager, secureStore, sidecarManager)
+  registerAttendanceTools(mcpServer, canvasClient, configManager, secureStore, sidecarManager, mockRosterStore)
 
   const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair()
   const mcpClient = new Client({ name: 'test-client', version: '0.0.1' })
@@ -265,8 +278,19 @@ describe('import_attendance', () => {
     const configPath = makeTmpConfigPath(dir)
     writeConfig(configPath)
     const csvPath = writeCsv(dir, CSV_MAP_LOOKUP)
-    // Pre-write a name map: "jsmith_zoom" -> Canvas user 1001 (Jane Smith)
-    writeNameMap(dir, { jsmith_zoom: 1001 })
+    // Configure mock to return Jane Smith with jsmith_zoom as a zoom alias
+    // (RosterStore now owns alias lookup; zoom-name-map.json is legacy)
+    mockRosterStoreMethods.allStudents.mockResolvedValueOnce([
+      {
+        canvasUserId: 1001,
+        name: 'Jane Smith',
+        sortable_name: 'Smith, Jane',
+        emails: [],
+        courseIds: [COURSE_ID],
+        zoomAliases: ['jsmith_zoom'],
+        created: new Date().toISOString(),
+      },
+    ])
     setupEnrollmentHandler()
 
     const { mcpClient } = await makeTestClient(configPath)
