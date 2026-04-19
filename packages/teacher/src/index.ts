@@ -2,7 +2,7 @@ import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { ConfigManager, CanvasClient, SecureStore, SidecarManager, RosterStore, createKeyProvider, migrateZoomNameMap, registerContextTools, fetchStudentEnrollments, TemplateService, seedDefaultTemplates } from '@canvas-mcp/core'
+import { ConfigManager, CanvasClient, SecureStore, SidecarManager, RosterStore, migrateZoomNameMap, registerContextTools, fetchStudentEnrollments, TemplateService, seedDefaultTemplates } from '@canvas-mcp/core'
 import { registerReportingTools } from './tools/reporting.js'
 import { registerContentTools } from './tools/content.js'
 import { registerModuleTools } from './tools/modules.js'
@@ -37,15 +37,10 @@ async function main() {
 
   sidecarManager = new SidecarManager(config.privacy.sidecarPath, config.privacy.blindingEnabled)
 
-  // Create RosterStore and preload tokens
-  let keyProvider: Awaited<ReturnType<typeof createKeyProvider>> | undefined
-  try {
-    keyProvider = await createKeyProvider(config, configDir)
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err)
-    process.stderr.write(`[roster] Failed to create key provider at startup: ${msg}\n`)
-  }
-  const rosterStore = new RosterStore(configDir, keyProvider!)
+  // Create RosterStore and preload tokens.
+  // Encryption-at-rest is currently disabled — FERPA protection relies on 0600 file perms.
+  // The keyProvider wiring is retained in RosterStore's constructor for future re-enablement.
+  const rosterStore = new RosterStore(configDir)
   try {
     const students = await rosterStore.load()
     secureStore.preload(students.map((s) => ({ canvasUserId: s.canvasUserId, name: s.name })))
@@ -58,7 +53,8 @@ async function main() {
   // Adapter bridges RosterStore (returns null/boolean) to migration's local interface (undefined/void).
   migrateZoomNameMap(configDir, {
     findByCanvasUserId: async (id: number) => {
-      const s = await rosterStore.findByCanvasUserId(id)
+      const students = await rosterStore.load()
+      const s = students.find((s) => s.canvasUserId === id)
       return s ?? undefined
     },
     appendZoomAlias: async (id: number, alias: string) => {

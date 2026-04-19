@@ -2,18 +2,27 @@ import { vi, describe, it, expect, beforeEach } from 'vitest'
 import { syncRosterFromEnrollments } from '../../../src/roster/sync.js'
 import type { RosterStudent } from '../../../src/roster/types.js'
 
-// Mock fetchStudentEnrollments
+// Mock fetchStudentEnrollments + fetchTeacherSectionIds
 vi.mock('../../../src/canvas/submissions.js', () => ({
   fetchStudentEnrollments: vi.fn(),
+  fetchTeacherSectionIds: vi.fn(),
 }))
 
-import { fetchStudentEnrollments } from '../../../src/canvas/submissions.js'
+import { fetchStudentEnrollments, fetchTeacherSectionIds } from '../../../src/canvas/submissions.js'
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeEnrollment(userId: number, name: string, sortableName: string, loginId?: string) {
+const DEFAULT_SECTION = 500
+
+function makeEnrollment(
+  userId: number,
+  name: string,
+  sortableName: string,
+  loginId?: string,
+  sectionId: number = DEFAULT_SECTION,
+) {
   return {
     id: userId * 100,
     user_id: userId,
@@ -25,6 +34,7 @@ function makeEnrollment(userId: number, name: string, sortableName: string, logi
     },
     type: 'StudentEnrollment' as const,
     enrollment_state: 'active' as const,
+    course_section_id: sectionId,
     grades: { current_score: null, current_grade: null, final_score: null, final_grade: null },
   }
 }
@@ -35,6 +45,7 @@ function makeStudent(partial: Partial<RosterStudent> & { canvasUserId: number })
     sortable_name: 'Name, Default',
     emails: [],
     courseIds: [],
+    sectionIds: [],
     zoomAliases: [],
     created: '2025-01-01T00:00:00.000Z',
     ...partial,
@@ -70,7 +81,7 @@ function makeMockStore(initial: RosterStudent[] = []) {
     return true
   })
 
-  const allStudents = vi.fn(async () => students.map((s) => ({ ...s })))
+  const allStudents = vi.fn(async (courseId: number) => students.filter((s) => s.courseIds.includes(courseId)).map((s) => ({ ...s })))
 
   return { load, upsertStudent, removeStudentCourseId, allStudents, _students: () => students }
 }
@@ -84,6 +95,8 @@ const mockClient = {} as never
 describe('syncRosterFromEnrollments', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // Default: teacher owns DEFAULT_SECTION so all default-section enrollments pass the filter.
+    vi.mocked(fetchTeacherSectionIds).mockResolvedValue(new Set([DEFAULT_SECTION]))
   })
 
   // -------------------------------------------------------------------------
@@ -167,11 +180,17 @@ describe('syncRosterFromEnrollments', () => {
     const store = makeMockStore(initial)
     const result = await syncRosterFromEnrollments(store as never, mockClient, 101)
 
-    // Bob still has course 200, so should still be in roster
+    // Result is scoped to course 101 — Bob was removed from 101, so he's
+    // not in the course-scoped result even though he still has course 200.
     const bob = result.find((s) => s.canvasUserId === 20)
-    expect(bob).toBeDefined()
-    expect(bob!.courseIds).not.toContain(101)
-    expect(bob!.courseIds).toContain(200)
+    expect(bob).toBeUndefined()
+
+    // Verify Bob is still in the underlying store with course 200
+    const allInStore = store._students()
+    const bobInStore = allInStore.find((s) => s.canvasUserId === 20)
+    expect(bobInStore).toBeDefined()
+    expect(bobInStore!.courseIds).not.toContain(101)
+    expect(bobInStore!.courseIds).toContain(200)
   })
 
   // -------------------------------------------------------------------------
@@ -203,7 +222,7 @@ describe('syncRosterFromEnrollments', () => {
     const result = await syncRosterFromEnrollments(store as never, mockClient, 101)
 
     expect(store.allStudents).toHaveBeenCalled()
-    expect(result).toEqual(await store.allStudents())
+    expect(result).toEqual(await store.allStudents(101))
   })
 
   // -------------------------------------------------------------------------

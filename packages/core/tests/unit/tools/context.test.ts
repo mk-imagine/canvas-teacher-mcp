@@ -153,6 +153,39 @@ describe('context tools', () => {
       expect(config.program.activeCourseId).toBe(101)
     })
 
+    it('resolves an exact numeric course ID (bypasses fuzzy scoring)', async () => {
+      const configPath = makeTmpConfigPath()
+      writeConfig(configPath)
+      const { mcpClient, configManager } = await makeTestClient(configPath)
+
+      const result = await mcpClient.callTool({
+        name: 'set_active_course',
+        arguments: { query: '102' },
+      })
+      const text = (result.content as Array<{ type: string; text: string }>)[0].text
+      expect(text).toContain('CSC411-001')
+
+      const config = configManager.read()
+      expect(config.program.activeCourseId).toBe(102)
+    })
+
+    it('falls through to fuzzy matching when numeric query does not match any course ID', async () => {
+      const configPath = makeTmpConfigPath()
+      writeConfig(configPath)
+      const { mcpClient, configManager } = await makeTestClient(configPath)
+
+      // 408 appears in CSC408-001 but not as a course id
+      const result = await mcpClient.callTool({
+        name: 'set_active_course',
+        arguments: { query: '408' },
+      })
+      const text = (result.content as Array<{ type: string; text: string }>)[0].text
+      expect(text).toContain('101')
+
+      const config = configManager.read()
+      expect(config.program.activeCourseId).toBe(101)
+    })
+
     it('resolves a fuzzy match on code + term', async () => {
       const configPath = makeTmpConfigPath()
       writeConfig(configPath)
@@ -305,7 +338,8 @@ describe('context tools', () => {
       expect(syncRosterFromEnrollments).toHaveBeenCalledWith(
         rosterStore,
         expect.anything(),
-        101
+        101,
+        expect.anything()
       )
     })
 

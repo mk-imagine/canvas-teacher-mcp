@@ -92,27 +92,24 @@ describe('matchAttendance', () => {
     expect(onAutoMatch).toHaveBeenCalledWith('Jane Smth', 1)
   })
 
-  it('(5) ambiguous fuzzy match — distance between 0.45 and 0.5', () => {
+  it('(5) ambiguous — top candidates within confidence margin', () => {
     const aliasMap = new Map<string, number>()
-    // "Jxxx Smythson" — part "Smythson" vs "Smith" = lev 4/8 = 0.5,
-    // so best part distance is 0.5 which equals AMBIGUOUS_CEILING.
-    // Full-string is distant. Lands just at the edge — no candidates below 0.5.
-    // Instead use "Jxxx Smythsn" — part "Smythsn" vs "Smith" = lev 3/7 = 0.429,
-    // which is below 0.45 (auto-match). With the raised threshold, this now
-    // auto-matches but ties between Jane Smith and John Smith → ambiguous.
+    // "Jne Smith" — pairwise avg to Jane Smith ~0.1, to John Smith ~0.2.
+    // Both below AUTO_MATCH_THRESHOLD (0.30) but gap (0.1) < MIN_CONFIDENCE_MARGIN (0.20).
+    // Should route to review rather than auto-match.
     const participants: ZoomParticipant[] = [
-      { name: 'Jxxx Smythsn', originalName: null, duration: 30 },
+      { name: 'Jne Smith', originalName: null, duration: 30 },
     ]
 
     const result = matchAttendance(participants, roster, aliasMap)
 
     expect(result.matched).toHaveLength(0)
     expect(result.ambiguous).toHaveLength(1)
-    expect(result.ambiguous[0].zoomName).toBe('Jxxx Smythsn')
-    expect(result.ambiguous[0].candidates.length).toBeGreaterThanOrEqual(1)
-    for (const c of result.ambiguous[0].candidates) {
-      expect(c.distance).toBeLessThan(0.5)
-    }
+    expect(result.ambiguous[0].zoomName).toBe('Jne Smith')
+    // Both Smith candidates should be present
+    const candidateIds = result.ambiguous[0].candidates.map((c) => c.canvasUserId).sort()
+    expect(candidateIds).toContain(1)
+    expect(candidateIds).toContain(2)
   })
 
   it('(6) unmatched name with no nearby candidates — no candidates shown', () => {
@@ -321,9 +318,27 @@ describe('bestDistance', () => {
     expect(d).toBeGreaterThan(0.5)
   })
 
-  it('returns best part-to-part distance for multi-part names', () => {
-    // "jane smth" vs "jane smith" — part "jane" vs "jane" = 0
+  it('uses pairwise-average for multi-part names, not min-of-parts', () => {
+    // "jane smth" vs "jane smith" — pairwise: (jane,jane)=0, (smth,smith)=1/5=0.2
+    // Average = 0.1. Full-string distance = 1/10 = 0.1. Min = 0.1.
+    // Old algorithm returned 0 (min of parts); new algorithm ensures both
+    // parts must contribute, preventing false matches on a single shared part.
     const d = bestDistance('jane smth', 'jane smith')
+    expect(d).toBeCloseTo(0.1, 5)
+  })
+
+  it('single-part zoom alias still uses min-of-parts (e.g. "steve" → "Steve Johnson")', () => {
+    // One-part zoom alias should match a multi-part roster name when a single
+    // part matches perfectly. Preserves first-name-only alias behavior.
+    const d = bestDistance('steve', 'steve johnson')
     expect(d).toBe(0)
+  })
+
+  it('multi-part names with one shared part and one different no longer match at zero', () => {
+    // "john smith" vs "john adams" — pairwise: (john,john)=0, (smith,adams)=5/5=1.0.
+    // Average = 0.5. Full-string = 5/10 = 0.5. Min = 0.5.
+    // Previously returned 0 (shared "john" part); would have auto-matched.
+    const d = bestDistance('john smith', 'john adams')
+    expect(d).toBeCloseTo(0.5, 5)
   })
 })

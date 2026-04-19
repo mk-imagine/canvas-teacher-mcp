@@ -10,32 +10,46 @@ import { join } from 'node:path'
 import { RosterCrypto } from './crypto.js'
 import type { RosterStudent, RosterFile, RosterKeyProvider } from './types.js'
 
+const CURRENT_VERSION = 2
+
 /**
- * RosterStore: persistent encrypted storage for the shared student roster.
+ * RosterStore: persistent storage for the shared student roster.
  *
- * On-disk format: `{ version: 1, last_updated: "<ISO 8601>", encrypted: "<base64>" }`
+ * FERPA protection is currently file-permission-based (mode 0600) with
+ * plaintext data at rest (on-disk format v2). The AES-256-GCM encryption
+ * machinery (`RosterCrypto`, `RosterKeyProvider`) is retained as dead wiring
+ * for future re-enablement. To re-enable, construct with a `keyProvider` and
+ * update `save()` to branch on its presence.
  *
- * Writes are atomic: data is written to a `.tmp` file, then renamed into place,
- * ensuring the roster file is never left in a partially-written state.
+ * On-disk format:
+ *   v2 (current): `{ version: 2, last_updated: "<ISO>", students: [...] }`
+ *   v1 (legacy):  `{ version: 1, last_updated: "<ISO>", encrypted: "<base64>" }`
  *
- * Key derivation is lazy: the `RosterKeyProvider.deriveKey()` is called on first
- * `load()` or `save()` and the resulting `RosterCrypto` instance is cached for the
- * lifetime of this `RosterStore` instance.
+ * Legacy v1 files are auto-quarantined on load when no keyProvider is wired:
+ * the file is renamed to `roster.json.encrypted-legacy` and the store returns
+ * an empty roster so `syncRosterFromEnrollments` can repopulate cleanly.
+ *
+ * Writes are atomic: data is written to a `.tmp` file, then renamed into place.
+ * File permissions are set to `0600` on both the temp file and the final file.
  */
 export class RosterStore {
   private readonly rosterPath: string
-  private readonly keyProvider: RosterKeyProvider
+  private readonly keyProvider: RosterKeyProvider | undefined
   private crypto: RosterCrypto | null = null
 
-  constructor(configDir: string, keyProvider: RosterKeyProvider) {
+  constructor(configDir: string, keyProvider?: RosterKeyProvider) {
     this.rosterPath = join(configDir, 'roster.json')
     this.keyProvider = keyProvider
   }
 
   /**
    * Derives the key on first call and caches the resulting `RosterCrypto` instance.
+   * Only used for decrypting legacy v1 files when a keyProvider is wired.
    */
   private async ensureCrypto(): Promise<RosterCrypto> {
+    if (this.keyProvider === undefined) {
+      throw new Error('No keyProvider configured; cannot decrypt legacy roster.')
+    }
     if (this.crypto === null) {
       const key = await this.keyProvider.deriveKey()
       this.crypto = new RosterCrypto(key)
@@ -47,8 +61,12 @@ export class RosterStore {
    * Loads the roster from disk.
    *
    * Returns an empty array if the roster file does not exist.
-   * Throws a descriptive error if the file is corrupt, has an unsupported version,
-   * or cannot be decrypted with the current key.
+   *
+   * - v2 plaintext: returns the `students` array directly.
+   * - v1 encrypted with keyProvider: decrypts (legacy read path).
+   * - v1 encrypted without keyProvider: quarantines the file by renaming to
+   *   `roster.json.encrypted-legacy` and returns an empty array, emitting a
+   *   stderr warning. The caller is expected to re-sync from Canvas.
    */
   async load(): Promise<RosterStudent[]> {
     if (!existsSync(this.rosterPath)) {
@@ -72,29 +90,43 @@ export class RosterStore {
     }
 
     const file = parsed as RosterFile
-    if (file.version !== 1) {
-      throw new Error(`Unsupported roster file version: ${file.version}`)
+
+    if (file.version === 2 && Array.isArray(file.students)) {
+      // Backfill-safe: older v2 records may predate the sectionIds field.
+      return file.students.map((s) => ({
+        ...s,
+        sectionIds: Array.isArray(s.sectionIds) ? s.sectionIds : [],
+      }))
     }
 
-    const crypto = await this.ensureCrypto()
-    // decrypt() throws an actionable error (containing "roster rekey") if the key is wrong
-    return crypto.decrypt(file.encrypted)
+    if (file.version === 1 && typeof file.encrypted === 'string') {
+      if (this.keyProvider === undefined) {
+        const quarantinePath = `${this.rosterPath}.encrypted-legacy`
+        renameSync(this.rosterPath, quarantinePath)
+        process.stderr.write(
+          `[roster] Encrypted legacy roster quarantined to ${quarantinePath}; continuing with empty roster.\n`
+        )
+        return []
+      }
+      const crypto = await this.ensureCrypto()
+      return crypto.decrypt(file.encrypted)
+    }
+
+    throw new Error(`Unsupported roster file version: ${file.version}`)
   }
 
   /**
-   * Saves the roster to disk using an atomic write.
+   * Saves the roster to disk using an atomic write, mode 0600.
    *
-   * Writes to `<rosterPath>.tmp` then renames into place, so the file is never
-   * left in a partially-written state. File permissions are set to `0600` on both
-   * the temp file and the final file.
+   * Always writes the v2 plaintext format. Encryption-at-rest is currently
+   * disabled; the `keyProvider` and `RosterCrypto` wiring is retained for
+   * future re-enablement but not exercised on the write path.
    */
   async save(students: RosterStudent[]): Promise<void> {
-    const crypto = await this.ensureCrypto()
-
     const rosterFile: RosterFile = {
-      version: 1,
+      version: CURRENT_VERSION,
       last_updated: new Date().toISOString(),
-      encrypted: crypto.encrypt(students),
+      students,
     }
 
     const content = JSON.stringify(rosterFile, null, 2)
@@ -115,9 +147,9 @@ export class RosterStore {
    * Returns the student with the given Canvas user ID, or `null` if not found.
    * Reads fresh from disk on every call.
    */
-  async findByCanvasUserId(id: number): Promise<RosterStudent | null> {
+  async findByCanvasUserId(id: number, courseId: number): Promise<RosterStudent | null> {
     const students = await this.load()
-    return students.find((s) => s.canvasUserId === id) ?? null
+    return students.find((s) => s.canvasUserId === id && s.courseIds.includes(courseId)) ?? null
   }
 
   /**
@@ -125,10 +157,10 @@ export class RosterStore {
    * address (case-insensitive), or `null` if not found.
    * Reads fresh from disk on every call.
    */
-  async findByEmail(email: string): Promise<RosterStudent | null> {
+  async findByEmail(email: string, courseId: number): Promise<RosterStudent | null> {
     const students = await this.load()
     const lower = email.toLowerCase()
-    return students.find((s) => s.emails.some((e) => e.toLowerCase() === lower)) ?? null
+    return students.find((s) => s.courseIds.includes(courseId) && s.emails.some((e) => e.toLowerCase() === lower)) ?? null
   }
 
   /**
@@ -136,18 +168,19 @@ export class RosterStore {
    * given alias (case-insensitive), or `null` if not found.
    * Reads fresh from disk on every call.
    */
-  async findByZoomAlias(alias: string): Promise<RosterStudent | null> {
+  async findByZoomAlias(alias: string, courseId: number): Promise<RosterStudent | null> {
     const students = await this.load()
     const lower = alias.toLowerCase()
-    return students.find((s) => s.zoomAliases.some((a) => a.toLowerCase() === lower)) ?? null
+    return students.find((s) => s.courseIds.includes(courseId) && s.zoomAliases.some((a) => a.toLowerCase() === lower)) ?? null
   }
 
   /**
    * Returns all students in the roster.
    * Reads fresh from disk on every call.
    */
-  async allStudents(): Promise<RosterStudent[]> {
-    return this.load()
+  async allStudents(courseId: number): Promise<RosterStudent[]> {
+    const students = await this.load()
+    return students.filter((s) => s.courseIds.includes(courseId))
   }
 
   /**

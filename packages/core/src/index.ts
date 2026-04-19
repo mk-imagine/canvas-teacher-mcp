@@ -21,6 +21,7 @@ export {
   type CanvasEnrollment,
   type CanvasAssignment,
   fetchStudentEnrollments,
+  fetchTeacherSectionIds,
   fetchAllSubmissions,
   fetchStudentSubmissions,
   fetchAssignmentSubmissions,

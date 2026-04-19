@@ -35,6 +35,7 @@ export interface CanvasEnrollment {
   }
   type: 'StudentEnrollment' | 'TeacherEnrollment' | 'TaEnrollment'
   enrollment_state: 'active' | 'invited' | 'completed' | 'inactive'
+  course_section_id: number
   grades: {
     current_score: number | null
     current_grade: string | null
@@ -67,6 +68,27 @@ export async function fetchStudentEnrollments(
     'type[]': 'StudentEnrollment',
     per_page: '100',
   })
+}
+
+/**
+ * Returns the set of section IDs where the current user is enrolled as a
+ * Teacher or TA for the given course. Used to scope roster sync and
+ * attendance matching to only the teacher's own sections, excluding
+ * cross-listed sections taught by other instructors.
+ */
+export async function fetchTeacherSectionIds(
+  client: CanvasClient,
+  courseId: number
+): Promise<Set<number>> {
+  const enrollments = await client.getWithArrayParams<CanvasEnrollment>(
+    `/api/v1/courses/${courseId}/enrollments`,
+    {
+      'type[]': ['TeacherEnrollment', 'TaEnrollment'],
+      user_id: 'self',
+      per_page: '100',
+    }
+  )
+  return new Set(enrollments.map((e) => e.course_section_id))
 }
 
 export async function fetchAllSubmissions(

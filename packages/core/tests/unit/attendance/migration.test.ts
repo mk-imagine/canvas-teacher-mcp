@@ -12,7 +12,7 @@ describe('migrateZoomNameMap', () => {
     vi.restoreAllMocks()
   })
 
-  it('successful migration: migrates all entries and deletes file', async () => {
+  it('successful migration: migrates all entries and renames file to .legacy', async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'migration-test-'))
 
     const nameMap = { alice_zoom: 1, bob_zoom: 2 }
@@ -33,6 +33,7 @@ describe('migrateZoomNameMap', () => {
     expect(mockStore.appendZoomAlias).toHaveBeenCalledWith(2, 'bob_zoom')
 
     await expect(fs.access(path.join(tempDir, 'zoom-name-map.json'))).rejects.toThrow()
+    await expect(fs.access(path.join(tempDir, 'zoom-name-map.json.legacy'))).resolves.toBeUndefined()
   })
 
   it('missing file: returns zero migrated and deleted false without calling store', async () => {
@@ -49,7 +50,7 @@ describe('migrateZoomNameMap', () => {
     expect(mockStore.findByCanvasUserId).not.toHaveBeenCalled()
   })
 
-  it('unknown userId: skips unknown, migrates known, writes to stderr, deletes file', async () => {
+  it('unknown userId: skips unknown, migrates known, writes to stderr, renames to .legacy', async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'migration-test-'))
 
     const nameMap = { alice_zoom: 1, unknown_zoom: 999 }
@@ -76,5 +77,6 @@ describe('migrateZoomNameMap', () => {
     expect(stderrOutput).toContain('unknown_zoom')
 
     await expect(fs.access(path.join(tempDir, 'zoom-name-map.json'))).rejects.toThrow()
+    await expect(fs.access(path.join(tempDir, 'zoom-name-map.json.legacy'))).resolves.toBeUndefined()
   })
 })

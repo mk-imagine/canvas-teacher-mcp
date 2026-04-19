@@ -5,6 +5,7 @@ import { fetchTeacherCourses, type CanvasCourse } from '../canvas/courses.js'
 import { type ConfigManager } from '../config/manager.js'
 import { type RosterStore } from '../roster/store.js'
 import { syncRosterFromEnrollments } from '../roster/sync.js'
+import { ConflictStore } from '../roster/conflicts.js'
 import { type SecureStore } from '../security/secure-store.js'
 
 function tokenize(str: string): string[] {
@@ -69,14 +70,23 @@ export function registerContextTools(
   server.registerTool(
     'set_active_course',
     {
-      description: 'Set the active course by fuzzy-matching a query string against course code, name, and term.',
+      description: 'Set the active course by exact Canvas ID or by fuzzy-matching a query string against course code, name, and term.',
       inputSchema: z.object({
-        query: z.string().describe('Search string, e.g. "CSC408" or "408 spring"'),
+        query: z.string().describe('Canvas course ID (e.g. "70810") or search string (e.g. "CSC408", "408 spring")'),
       }),
     },
     async (args) => {
       const config = configManager.read()
       const courses = await fetchTeacherCourses(client)
+
+      // Exact course-ID match: if the query is all digits and matches a course id,
+      // short-circuit before fuzzy scoring. This handles models that pass the
+      // numeric id directly from list_courses output.
+      const trimmedQuery = args.query.trim()
+      const exactIdMatch = /^\d+$/.test(trimmedQuery)
+        ? courses.find((c) => String(c.id) === trimmedQuery)
+        : undefined
+
       const queryTokens = tokenize(args.query)
 
       const scored = courses
@@ -85,7 +95,9 @@ export function registerContextTools(
         .sort((a, b) => b.score - a.score)
 
       const maxScore = scored[0]?.score ?? 0
-      const topMatches = scored.filter((x) => x.score === maxScore)
+      const topMatches = exactIdMatch
+        ? [{ course: exactIdMatch, score: Infinity }]
+        : scored.filter((x) => x.score === maxScore)
 
       if (topMatches.length === 1) {
         const { course } = topMatches[0]
@@ -103,7 +115,8 @@ export function registerContextTools(
         })
 
         if (rosterStore && secureStore) {
-          syncRosterFromEnrollments(rosterStore, client, course.id)
+          const conflictStore = new ConflictStore(configManager.getConfigDir())
+          syncRosterFromEnrollments(rosterStore, client, course.id, conflictStore)
             .then((students) =>
               secureStore.preload(
                 students.map((s) => ({ canvasUserId: s.canvasUserId, name: s.name }))

@@ -55,7 +55,7 @@ export async function migrateZoomNameMap(
     migrated++
   }
 
-  await fs.unlink(filePath)
+  await fs.rename(filePath, filePath + '.legacy')
 
   return { migrated, deleted: true }
 }

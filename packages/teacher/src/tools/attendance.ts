@@ -6,6 +6,7 @@ import {
   type ConfigManager,
   type CanvasTeacherConfig,
   fetchStudentEnrollments,
+  fetchTeacherSectionIds,
   gradeSubmission,
   parseZoomCsv,
   matchAttendance,
@@ -13,9 +14,11 @@ import {
   SecureStore,
   SidecarManager,
   RosterStore,
+  ConflictStore,
   type MatchResult,
   type RosterEntry,
   type ReviewEntry,
+  type ZoomParticipant,
 } from '@canvas-mcp/core'
 
 // ─── Per-server parse state (WeakMap prevents cross-instance leakage) ───────
@@ -130,8 +133,13 @@ export function registerAttendanceTools(
           ? participants.filter((p) => p.duration >= minDuration)
           : participants
 
-        // Fetch Canvas roster
-        const enrollments = await fetchStudentEnrollments(client, courseId)
+        // Fetch Canvas roster — filtered to the teacher's own sections, so
+        // cross-listed sections taught by other instructors don't pollute
+        // the matching haystack.
+        const teacherSections = await fetchTeacherSectionIds(client, courseId)
+        const enrollments = (await fetchStudentEnrollments(client, courseId)).filter(
+          (e) => teacherSections.has(e.course_section_id),
+        )
         const roster: RosterEntry[] = enrollments.map((e) => ({
           userId: e.user_id,
           name: e.user.name,
@@ -141,7 +149,7 @@ export function registerAttendanceTools(
         // Build alias map from RosterStore
         let students: Awaited<ReturnType<RosterStore['allStudents']>>
         try {
-          students = await rosterStore.allStudents()
+          students = await rosterStore.allStudents(courseId)
         } catch (err) {
           return toolError(`Failed to load roster: ${(err as Error).message}`)
         }
@@ -152,14 +160,43 @@ export function registerAttendanceTools(
           }
         }
 
-        // Run matching pipeline; collect onAutoMatch promises
+        // Conflict-driven review routing: zoom names whose aliases collided
+        // with a different student's canonical name at sync time are force-
+        // routed to the review file (rather than auto-matched via alias).
+        const conflictStore = new ConflictStore(configManager.getConfigDir())
+        const conflicted: ZoomParticipant[] = []
+        const matchable: ZoomParticipant[] = []
+        for (const p of filtered) {
+          if (conflictStore.hasConflict(p.name)) {
+            conflicted.push(p)
+          } else {
+            matchable.push(p)
+          }
+        }
+
+        // Run matching pipeline on non-conflicted participants
         const autoMatchPromises: Promise<boolean>[] = []
-        const matchResult = matchAttendance(filtered, roster, aliasMap, (zoomName, canvasUserId) => {
+        const matchResult = matchAttendance(matchable, roster, aliasMap, (zoomName, canvasUserId) => {
           autoMatchPromises.push(rosterStore.appendZoomAlias(canvasUserId, zoomName))
         })
 
         // Persist auto-matched aliases
         await Promise.all(autoMatchPromises)
+
+        // Append conflicted participants to ambiguous with both candidate users
+        for (const p of conflicted) {
+          const conflicts = conflictStore.forAlias(p.name)
+          const uniqueCandidates = new Map<number, { canvasName: string; canvasUserId: number; distance: number }>()
+          for (const c of conflicts) {
+            uniqueCandidates.set(c.aliasUserId, { canvasName: c.aliasUserName, canvasUserId: c.aliasUserId, distance: 0 })
+            uniqueCandidates.set(c.newUserId, { canvasName: c.newUserName, canvasUserId: c.newUserId, distance: 0 })
+          }
+          matchResult.ambiguous.push({
+            zoomName: p.name,
+            duration: p.duration,
+            candidates: [...uniqueCandidates.values()],
+          })
+        }
 
         // Write review file if there are ambiguous or unmatched entries
         const configDir = configManager.getConfigDir()
